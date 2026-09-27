@@ -16,6 +16,8 @@ O Store é o caso de uso transacional e a unidade de trabalho. A escolha concent
 
 READ COMMITTED + SELECT FOR UPDATE na carteira serializa alterações daquela carteira. Após adquirir o lock, o UPDATE também exige a versão lida. A ordem é carteira antes da alteração do registro da operação. Carteiras distintas não compartilham lock de aplicação. Deadlocks, indisponibilidade e timeout desfazem a tentativa e retornam retry/503; um erro de rede durante COMMIT pode ter resultado ambíguo, resolvido por nova consulta idempotente.
 
+Timestamps financeiros persistidos usam `clock_timestamp()` do PostgreSQL, obtido depois do lock. A transição usa o maior valor entre esse relógio e os timestamps já persistidos da carteira e da transação. Isso preserva monotonicidade inclusive para dados antigos gravados por uma instância com relógio adiantado. A abertura e a auditoria FAILED seguem a mesma fonte de tempo. A elegibilidade de retries usa o relógio do banco; durações locais usam o relógio monotônico do processo. A consulta de transação por UUID usa `id=$2`, sem conversão da coluna para texto, permitindo o uso da chave primária.
+
 O banco impõe saldo não negativo, integridade referencial, unicidades de transação e lançamento, imutabilidade do ledger e dos estados terminais. Triggers diferidas verificam a relação transação–ledger, direção financeira, continuidade do ledger e igualdade do saldo com a soma dos lançamentos. A aplicação usa `jungle_app`, sem ser dona das tabelas e sem UPDATE/DELETE/TRUNCATE no ledger; migrations usam outra identidade.
 
 **Custo conhecido:** a verificação diferida de consistência percorre o ledger da carteira. É uma defesa forte e verificável para o desafio, mas cresce com o histórico. Antes de produção, medir e substituir por uma estratégia incremental igualmente protegida. Não há meta de throughput assumida.
@@ -32,7 +34,11 @@ Não entram no hash de negócio: chave de idempotência, messageId, occurredAt o
 
 PENDING → PROCESSED, REJECTED, PENDING_REFERENCE ou FAILED. PENDING_REFERENCE → PENDING_REFERENCE ou estado terminal. Estados terminais são imutáveis. O construtor de estado e o schema rejeitam transições inválidas.
 
-Referência ausente ou ainda pendente gera PENDING_REFERENCE durável, com um único evento de entrada nessa condição. Worker consulta pendências e coordena a retomada pelo mesmo lock de carteira, rechecando estado e prazo dentro da transação. Backoff 1, 2, 4, 8, 16, 32 segundos; máximo de dez retomadas ou cinco minutos. Esgotamento gera REJECTED/REFERENCE_NOT_FOUND. Referência REJECTED ou FAILED gera REFERENCE_UNSUCCESSFUL. Divergência de provedor/jogador/carteira/moeda/rodada impede processamento. WIN com referência exige BET da mesma rodada; o valor de WIN pode diferir da aposta.
+Referência ausente ou ainda pendente gera PENDING_REFERENCE durável, com um único evento de entrada nessa condição. Worker consulta pendências e coordena a retomada pelo mesmo lock de carteira, rechecando estado e prazo dentro da transação. Backoff 1, 2, 4, 8, 16, 32 segundos. O worker primeiro verifica a referência: uma referência processada disponível pode resolver a operação inclusive na décima retomada ou após cinco minutos. Somente se ela continuar ausente ou pendente, dez retomadas ou cinco minutos encerram a espera com REJECTED/REFERENCE_NOT_FOUND. Uma operação já terminal não é reaberta pela chegada posterior da referência. Referência REJECTED ou FAILED gera REFERENCE_UNSUCCESSFUL. Divergência de provedor/jogador/carteira/moeda/rodada impede processamento. WIN com referência exige BET da mesma rodada; o valor de WIN pode diferir da aposta.
+
+Cada item do lote de referências tem timeout de dois segundos dentro do orçamento de dez segundos da iteração. Um erro é registrado com os identificadores disponíveis e o worker segue para o próximo item; cancelamento do contexto da iteração encerra o lote. Isso evita que uma única carteira bloqueada impeça todas as demais pendências do lote. Não se promete progresso de todo o lote se vários itens consumirem o orçamento total.
+
+Carteira inexistente e jogador divergente são erros anteriores à decisão financeira: não criam WagerTransaction REJECTED. Uma carteira ausente viola a FK; um jogador divergente viola a identidade/contexto da carteira. HTTP retorna 404/NOT_FOUND ou 422/WALLET_OWNER_MISMATCH. Em SQS, a tentativa faz rollback, não confirma inbox nem mensagem e segue o redrive até a DLQ se a condição persistir.
 
 Falhas transitórias (conexão, timeout, cancelamento, deadlock e serialização) fazem rollback e retornam 503/retry. Nenhuma tentativa de commit ambíguo vira FAILED. Uma lista explícita de respostas PostgreSQL que abortam a tentativa é considerada permanente: 0A000 (operação não suportada), 22003 (overflow de persistência), 23514 (invariante SQL violada) e 42883 (função ausente). São defeitos de infraestrutura/schema; rejeições financeiras esperadas são resolvidas no domínio antes desses erros.
 
@@ -73,7 +79,7 @@ Visibility timeout de 30 segundos, processamento limitado a 10 segundos, long po
 
 ## Outbox
 
-Claim atômico por UPDATE ... FROM SELECT FOR UPDATE SKIP LOCKED, até dez eventos, lease de 30 segundos e token UUID. A publicação ocorre fora da transação financeira. A confirmação exige o token atual: worker antigo não pode confirmar lease de outro. Falhas recebem backoff; lease expirado permite retomada por outra instância.
+Claim atômico por UPDATE ... FROM SELECT FOR UPDATE SKIP LOCKED, até dez eventos, lease de 30 segundos e token UUID. A publicação ocorre fora da transação financeira. A confirmação exige o token atual: worker antigo não pode confirmar lease de outro. Falhas recebem backoff exponencial limitado a 32 segundos, agendado pelo relógio do banco; lease expirado permite retomada por outra instância. Não há limite de tentativas nem descarte automático de eventos da outbox. A operação deve alertar por `wallet_outbox_oldest_seconds` e `wallet_outbox_pending` e investigar eventos que não avançam; o desafio expõe essas métricas, sem provisionar um sistema externo de alertas.
 
 Eventos preservam eventId ao republicar. Envelope contém eventId, eventType, aggregateId, correlationId, occurredAt UTC, version e data tipado. A correlação vem de X-Correlation-ID em HTTP ou correlationId/messageId em SQS; causationId identifica a mensagem SQS. Metadados são persistidos e preservados na retomada. Contratos completos e exemplos estão em `docs/EVENTS.md`. Payload imutável no schema. A fila de saída recebe todos os tipos; consumidores roteiam por eventType e deduplicam persistentemente por eventId.
 
@@ -109,7 +115,7 @@ Builds normais não contêm os failpoints. `-tags=failpoints` habilita encerrame
 
 ## Observabilidade
 
-Logs JSON registram correlação e os IDs disponíveis, estado e código de falha; não incluem tokens, secrets ou corpos financeiros completos. `/metrics` exige a identidade metrics e oferece:
+Logs JSON registram correlação e os IDs disponíveis, estado e código de falha. Erros HTTP 503 incluem correlationId, walletId, providerId e transactionId quando conhecidos; erros de retomada incluem a identidade da transação persistida. Os logs não incluem tokens, secrets ou corpos financeiros completos. `/metrics` exige a identidade metrics e oferece:
 
 | Métrica | Uso |
 | --- | --- |

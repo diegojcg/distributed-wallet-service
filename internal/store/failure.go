@@ -50,6 +50,10 @@ func (s *Store) auditFailure(ctx context.Context, o domain.Operation, key string
 	if w.PlayerID() != o.PlayerID {
 		return Result{}, ErrOwnership
 	}
+	now, err = databaseTime(ctx, tx)
+	if err != nil {
+		return Result{}, err
+	}
 	existing, err := scanTransaction(tx.QueryRow(ctx, "SELECT "+transactionCols+" FROM wager_transactions WHERE provider_id=$1 AND (idempotency_key=$2 OR external_id=$3) LIMIT 1", o.ProviderID, key, o.ExternalID))
 	if err == nil {
 		// Full conflict/replay check covers both uniqueness constraints.
@@ -62,6 +66,10 @@ func (s *Store) auditFailure(ctx context.Context, o domain.Operation, key string
 		}
 		t = existing
 	} else if errors.Is(err, pgx.ErrNoRows) {
+		t, err = domain.NewWagerTransaction(id, o, key, m.CorrelationID, m.CausationID, notBefore(now, w.UpdatedAt()))
+		if err != nil {
+			return Result{}, err
+		}
 		inserted, e := insertTransaction(ctx, tx, t)
 		if e != nil {
 			return Result{}, e
@@ -72,7 +80,7 @@ func (s *Store) auditFailure(ctx context.Context, o domain.Operation, key string
 	} else {
 		return Result{}, err
 	}
-	if err = t.MarkFailed(w, "INFRASTRUCTURE_PERMANENT", time.Now().UTC()); err != nil {
+	if err = t.MarkFailed(w, "INFRASTRUCTURE_PERMANENT", notBefore(now, w.UpdatedAt(), t.Snapshot().UpdatedAt)); err != nil {
 		return Result{}, err
 	}
 	if err = updateTransaction(ctx, tx, t); err != nil {

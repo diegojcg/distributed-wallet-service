@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"github.com/google/uuid"
-	"time"
 )
 
 type Publication struct {
@@ -35,7 +34,7 @@ func (s *Store) Published(ctx context.Context, p Publication) error {
 }
 func (s *Store) RetryPublication(ctx context.Context, p Publication) error {
 	attempt := min(p.Attempts, 5)
-	delay := time.Duration(1<<attempt) * time.Second
-	_, err := s.db.Exec(ctx, `UPDATE outbox SET lease_token=NULL,lease_until=NULL,next_attempt_at=$3 WHERE event_id=$1 AND lease_token=$2`, p.ID, p.Lease, time.Now().Add(delay))
+	delay := 1 << attempt
+	_, err := s.db.Exec(ctx, `UPDATE outbox SET lease_token=NULL,lease_until=NULL,next_attempt_at=clock_timestamp()+$3::int*interval '1 second' WHERE event_id=$1 AND lease_token=$2`, p.ID, p.Lease, delay)
 	return err
 }

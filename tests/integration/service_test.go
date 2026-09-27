@@ -232,29 +232,37 @@ func TestService(t *testing.T) {
 	t.Run("Two80BetsAcrossProcesses", func(t *testing.T) {
 		wallet, player := h.wallet(t, "100")
 		start := make(chan struct{})
-		codes := make(chan int, 2)
+		codes := make([]int, 2)
+		bodies := make([]map[string]any, 2)
+		keys := []string{uuid.NewString(), uuid.NewString()}
+		ops := []map[string]any{operation(wallet, player, uuid.NewString(), "BET", "80"), operation(wallet, player, uuid.NewString(), "BET", "80")}
 		var wg sync.WaitGroup
 		for i := 0; i < 2; i++ {
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
 				<-start
-				code, _, e := request(h.urls[i], "POST", "/wagering/transactions", h.provider, uuid.NewString(), operation(wallet, player, uuid.NewString(), "BET", "80"))
-				if e != nil {
-					t.Error(e)
+				var err error
+				codes[i], bodies[i], err = request(h.urls[i], "POST", "/wagering/transactions", h.provider, keys[i], ops[i])
+				if err != nil {
+					t.Error(err)
 				}
-				codes <- code
 			}(i)
 		}
 		close(start)
 		wg.Wait()
-		close(codes)
 		counts := map[int]int{}
-		for code := range codes {
+		for _, code := range codes {
 			counts[code]++
 		}
 		if counts[200] != 1 || counts[422] != 1 {
 			t.Fatal(counts)
+		}
+		for i := range codes {
+			replay := call(t, h.urls[(i+1)%3], "POST", "/wagering/transactions", h.provider, keys[i], ops[i], codes[i])
+			if replay["idempotentReplay"] != true || replay["transactionId"] != bodies[i]["transactionId"] || replay["status"] != bodies[i]["status"] || amount(replay) != amount(bodies[i]) || replay["failureCode"] != bodies[i]["failureCode"] {
+				t.Fatal("replay changed original result", bodies[i], replay)
+			}
 		}
 		out := call(t, h.urls[2], "GET", "/wallets/"+wallet, h.internal, "", nil, 200)
 		if amount(out) != "20.00" {

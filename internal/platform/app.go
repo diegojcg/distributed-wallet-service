@@ -46,7 +46,16 @@ func Module() fx.Option {
 				m.Observe(ctx, r, err, elapsed)
 				meta := requestmeta.From(ctx)
 				if meta.Transport == "reference" && !r.Replay {
-					logger.Info("reference retry result", "correlationId", meta.CorrelationID, "messageId", meta.CausationID, "transactionId", r.TransactionID, "walletId", meta.WalletID, "providerId", meta.ProviderID, "status", r.Status, "failureCode", r.FailureCode, "failed", err != nil)
+					id := r.TransactionID
+					if id == "" {
+						id = meta.TransactionID
+					}
+					fields := []any{"correlationId", meta.CorrelationID, "messageId", meta.CausationID, "transactionId", id, "walletId", meta.WalletID, "providerId", meta.ProviderID, "status", r.Status, "failureCode", r.FailureCode}
+					if err != nil {
+						logger.Error("reference retry failed", append(fields, "errorType", fmtErrorType(err))...)
+					} else {
+						logger.Info("reference retry result", fields...)
+					}
 				}
 			})
 		}, NewHTTP, NewWorkers, NewMetrics, prometheus.NewRegistry, func() *slog.Logger { return slog.New(slog.NewJSONHandler(os.Stdout, nil)) }),

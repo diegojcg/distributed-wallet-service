@@ -152,9 +152,6 @@ func (t *WagerTransaction) Evaluate(w Wallet, reference *WagerTransaction, alrea
 		t.state.Attempts++
 	}
 	reject := func(code string) (Wallet, Direction, error) { t.finish(Rejected, code, w, now); return w, "", nil }
-	if t.state.Attempts >= 10 || now.Sub(t.state.CreatedAt) >= 5*time.Minute {
-		return reject("REFERENCE_NOT_FOUND")
-	}
 	direction := Credit
 	if o.Kind == Bet {
 		direction = Debit
@@ -174,6 +171,9 @@ func (t *WagerTransaction) Evaluate(w Wallet, reference *WagerTransaction, alrea
 			}
 		}
 		if reference == nil || reference.Status() == Pending || reference.Status() == PendingReference {
+			if t.state.Attempts >= 10 || now.Sub(t.state.CreatedAt) >= 5*time.Minute {
+				return reject("REFERENCE_NOT_FOUND")
+			}
 			t.finish(PendingReference, "", w, now)
 			t.state.NextAttemptAt = now.Add(time.Duration(1<<min(t.state.Attempts, 5)) * time.Second)
 			return w, "", nil

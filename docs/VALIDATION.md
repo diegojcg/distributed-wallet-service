@@ -55,3 +55,5 @@ Logs detalhados ficam em work/, ignorados pelo Git. Nenhum repositório remoto f
 ## Auditoria posterior
 
 Uma nova rodada completa e regressões adicionais foram executadas em 27/09/2026. Veja AUDIT.md para os resultados, as duas correções pontuais de HTTP, as provas adicionais de SQL/outbox e o smoke das imagens finais. MANUAL.md contém o roteiro para validação humana.
+
+As correções posteriores da revisão independente e sua nova execução completa estão em REVIEW-FIXES.md.

@@ -65,6 +65,7 @@ Use outra réplica para consultar ou reenviar o mesmo BET: a resposta e as garan
 - OPENING externo, valor monetário numérico em JSON, negativo ou com mais de duas casas: 400.
 - UUID inválido/nulo e limite de ledger 0/negativo/maior que 100: 400.
 - REFUND antes do BET correspondente: 202/PENDING_REFERENCE. Envie o BET e consulte a transação até PROCESSED; o saldo deve retornar ao valor inicial.
+- Referência já disponível na última tentativa ou após o TTL: resolve enquanto a operação ainda estiver PENDING_REFERENCE; uma rejeição terminal anterior não é reaberta.
 - Referência que nunca chega: REJECTED/REFERENCE_NOT_FOUND após esgotar tentativas ou TTL. As retentativas usam backoff, não são instantâneas.
 - Saldo inicial zero: versão 1, sem OPENING/ledger; primeiro WIN positivo gera versão 2 e o primeiro crédito.
 

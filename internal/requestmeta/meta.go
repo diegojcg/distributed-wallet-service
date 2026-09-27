@@ -2,7 +2,7 @@ package requestmeta
 
 import "context"
 
-type Metadata struct{ CorrelationID, CausationID, WalletID, ProviderID, Transport string }
+type Metadata struct{ CorrelationID, CausationID, WalletID, ProviderID, TransactionID, Transport string }
 type key struct{}
 
 func With(ctx context.Context, m Metadata) context.Context { return context.WithValue(ctx, key{}, m) }

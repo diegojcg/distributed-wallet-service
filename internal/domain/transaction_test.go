@@ -210,3 +210,51 @@ func TestReferenceContextAndKind(t *testing.T) {
 		t.Fatal(tx)
 	}
 }
+
+func TestAvailableReferenceWinsAtRetryBoundary(t *testing.T) {
+	for _, boundary := range []struct {
+		name     string
+		attempts int
+		elapsed  time.Duration
+	}{
+		{"last attempt", 9, time.Second},
+		{"expired TTL", 0, 6 * time.Minute},
+	} {
+		t.Run(boundary.name, func(t *testing.T) {
+			w, now := fixture(t, "100")
+			bet := transaction(t, w, Bet, "10", "", now)
+			after, _, err := bet.Evaluate(w, nil, false, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, available := range []bool{false, true} {
+				refund := transaction(t, after, Refund, "10", bet.Operation().ExternalID, now)
+				if _, _, err = refund.Evaluate(after, nil, false, now); err != nil {
+					t.Fatal(err)
+				}
+				snapshot := refund.Snapshot()
+				snapshot.Attempts = boundary.attempts
+				refund, err = RestoreWagerTransaction(snapshot)
+				if err != nil {
+					t.Fatal(err)
+				}
+				attemptAt := now.Add(boundary.elapsed)
+				var reference *WagerTransaction
+				if available {
+					reference = &bet
+				}
+				got, _, err := refund.Evaluate(after, reference, false, attemptAt)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if available {
+					if refund.Status() != Processed || got.Balance().Amount() != "100.00" {
+						t.Fatal(refund, got)
+					}
+				} else if refund.Status() != Rejected || refund.Snapshot().FailureCode != "REFERENCE_NOT_FOUND" {
+					t.Fatal(refund)
+				}
+			}
+		})
+	}
+}

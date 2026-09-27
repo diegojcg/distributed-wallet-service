@@ -155,6 +155,6 @@ Com as imagens já em execução, rode `python3 scripts/smoke.py` (Python 3 padr
 
 `go test ./internal/domain -fuzz=FuzzMoneyRoundTrip -fuzztime=20s` explora a serialização monetária. Para repetir apenas a auditoria de fronteiras e SQL, após provisionar um ambiente de testes dedicado, execute `./scripts/integration.sh -run 'TestHTTPBoundaryAudit|TestStorageAudit' -v`. O segundo teste usa um banco temporário e diferencia as restrições do usuário da aplicação dos triggers que também bloqueiam alterações pelo administrador.
 
-Consulte `docs/AUDIT.md` para a evidência adicional e `docs/MANUAL.md` para o roteiro de validação manual.
+Consulte `docs/REVIEW-FIXES.md` para as correções e provas da revisão independente, `docs/AUDIT.md` para a auditoria anterior e `docs/MANUAL.md` para o roteiro de validação manual.
 
 Para uma regressão isolada após uma mudança pontual: `./scripts/clean-check.sh -run 'TestHTTPBoundaryAudit|TestStorageAudit'`. Sem argumentos, o script executa a integração completa. Nos dois casos, a imagem final recebe o smoke autenticado.

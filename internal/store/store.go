@@ -106,6 +106,14 @@ func (s *Store) Open(ctx context.Context, player string, balance domain.Money) (
 		return WalletView{}, err
 	}
 	defer rollback(tx)
+	now, err = databaseTime(ctx, tx)
+	if err != nil {
+		return WalletView{}, err
+	}
+	w, err = domain.NewWallet(w.ID(), player, balance, now)
+	if err != nil {
+		return WalletView{}, err
+	}
 	_, err = tx.Exec(ctx, `INSERT INTO wallets(id,player_id,currency,balance,version,created_at,updated_at) VALUES($1,$2,$3,$4,1,$5,$5)`, w.ID(), w.PlayerID(), balance.Currency(), balance.Minor(), now)
 	if err != nil {
 		return WalletView{}, conflict(err)
@@ -296,8 +304,11 @@ func (s *Store) apply(ctx context.Context, tx pgx.Tx, o domain.Operation, key st
 	if w.PlayerID() != o.PlayerID {
 		return Result{}, ErrOwnership
 	}
-	// Capture time after the wallet lock: a preceding writer may have updated it while waiting.
-	now = time.Now().UTC()
+	// Scheduling uses database wall time; transitions additionally preserve stored timestamps.
+	now, err = databaseTime(ctx, tx)
+	if err != nil {
+		return Result{}, err
+	}
 	if resume {
 		t, err = scanTransaction(tx.QueryRow(ctx, "SELECT "+transactionCols+" FROM wager_transactions WHERE provider_id=$1 AND external_id=$2 FOR UPDATE", o.ProviderID, o.ExternalID))
 		if err != nil {
@@ -307,6 +318,11 @@ func (s *Store) apply(ctx context.Context, tx pgx.Tx, o domain.Operation, key st
 			return result(t, true), nil
 		}
 	} else {
+		// The provisional constructor above only validates input/hash. Never persist its host clock.
+		t, err = domain.NewWagerTransaction(id, o, key, m.CorrelationID, m.CausationID, notBefore(now, w.UpdatedAt()))
+		if err != nil {
+			return Result{}, err
+		}
 		inserted, e := insertTransaction(ctx, tx, t)
 		if e != nil {
 			return Result{}, e
@@ -338,6 +354,7 @@ func (s *Store) apply(ctx context.Context, tx pgx.Tx, o domain.Operation, key st
 			}
 		}
 	}
+	now = notBefore(now, w.UpdatedAt(), t.Snapshot().UpdatedAt)
 	after, direction, err := t.Evaluate(w, reference, reversed, now)
 	if err != nil {
 		return Result{}, err
@@ -419,7 +436,7 @@ func (s *Store) Reconcile(ctx context.Context, id string) (Reconciliation, error
 	return Reconciliation{id, w.Balance(), calculated, difference, difference.Minor() == 0, count}, tx.Commit(ctx)
 }
 func (s *Store) Transaction(ctx context.Context, provider, id string, external bool) (Result, error) {
-	query := `SELECT id,status,result_balance,currency,COALESCE(failure_code,'') FROM wager_transactions WHERE provider_id=$1 AND id::text=$2`
+	query := `SELECT id,status,result_balance,currency,COALESCE(failure_code,'') FROM wager_transactions WHERE provider_id=$1 AND id=$2`
 	if external {
 		query = `SELECT id,status,result_balance,currency,COALESCE(failure_code,'') FROM wager_transactions WHERE provider_id=$1 AND external_id=$2`
 	}

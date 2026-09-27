@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -106,7 +107,9 @@ func testSQS(t *testing.T, h *harness) {
 	poison := envelope(mutated, uuid.NewString(), ids[0])
 	send(t, c, q, wallet, poison)
 	dlq := queueURL(t, root, "wager-transactions-dlq.fifo")
-	eventually(t, 45*time.Second, func() bool {
+	// Include a lost receive response (30s visibility) plus all five deliveries
+	// and their backoffs, not only the retry delays observed by live consumers.
+	eventually(t, 90*time.Second, func() bool {
 		r, e := root.ReceiveMessage(context.Background(), &sqs.ReceiveMessageInput{QueueUrl: &dlq, MaxNumberOfMessages: 10, WaitTimeSeconds: 1})
 		if e != nil {
 			return false
@@ -174,4 +177,60 @@ func TestPublishBeforeConfirmationCrash(t *testing.T) {
 		e := h.db.QueryRow(context.Background(), "SELECT count(*) FILTER(WHERE published_at IS NULL),count(*) FILTER(WHERE attempts>=2) FROM outbox WHERE aggregate_id=$1", wallet).Scan(&pending, &retried)
 		return e == nil && pending == 0 && retried >= 1
 	})
+	// Inspect the real output queue with its restricted observer identity. FIFO
+	// may suppress the repeated send within five minutes: attempts above proves
+	// republication, while the received body must retain the persisted event ID.
+	expected := map[string]map[string]any{}
+	rows, err := h.db.Query(context.Background(), "SELECT event_id,payload FROM outbox WHERE aggregate_id=$1", wallet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id string
+		var raw []byte
+		if err = rows.Scan(&id, &raw); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		var payload map[string]any
+		if err = json.Unmarshal(raw, &payload); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		expected[id] = payload
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil || len(expected) != 2 {
+		t.Fatal(expected, err)
+	}
+	observer := sqsClient(t, "observer")
+	q := queueURL(t, observer, "wallet-events.fifo")
+	seen := map[string]bool{}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	eventually(t, 45*time.Second, func() bool {
+		out, err := observer.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{QueueUrl: &q, MaxNumberOfMessages: 10, WaitTimeSeconds: 1, MessageSystemAttributeNames: []types.MessageSystemAttributeName{types.MessageSystemAttributeNameAll}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, message := range out.Messages {
+			var payload map[string]any
+			if err = json.Unmarshal([]byte(aws.ToString(message.Body)), &payload); err != nil {
+				t.Fatal(err)
+			}
+			id, _ := payload["eventId"].(string)
+			if want, ok := expected[id]; ok {
+				if !reflect.DeepEqual(want, payload) || message.Attributes["MessageDeduplicationId"] != id || message.Attributes["MessageGroupId"] != wallet {
+					t.Fatal("published event differs from durable snapshot", want, payload, message.Attributes)
+				}
+				seen[id] = true
+			}
+			if _, err = observer.DeleteMessage(ctx, &sqs.DeleteMessageInput{QueueUrl: &q, ReceiptHandle: message.ReceiptHandle}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return len(seen) == len(expected)
+	})
+
 }

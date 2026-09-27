@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -52,7 +53,9 @@ func NewHTTP(lc fx.Lifecycle, c Config, shutdown fx.Shutdowner, workers *Workers
 				writeError(w, 403, "FORBIDDEN")
 				return
 			}
-			handler(w, r, identity)
+			meta := requestmeta.From(r.Context())
+			meta.ProviderID = identity.ProviderID
+			handler(w, r.WithContext(requestmeta.With(r.Context(), meta)), identity)
 		}
 	}
 	mux.Handle("GET /metrics", protect("metrics", func(w http.ResponseWriter, r *http.Request, _ auth.Identity) {
@@ -68,7 +71,7 @@ func NewHTTP(lc fx.Lifecycle, c Config, shutdown fx.Shutdowner, workers *Workers
 		}
 		result, err := s.Open(r.Context(), input.PlayerID, input.InitialBalance)
 		if err != nil {
-			handleError(w, err, logger)
+			handleError(w, r, err, logger)
 			return
 		}
 		writeJSON(w, 201, result)
@@ -79,7 +82,7 @@ func NewHTTP(lc fx.Lifecycle, c Config, shutdown fx.Shutdowner, workers *Workers
 		}
 		result, err := s.Wallet(r.Context(), r.PathValue("id"))
 		if err != nil {
-			handleError(w, err, logger)
+			handleError(w, r, err, logger)
 			return
 		}
 		writeJSON(w, 200, result)
@@ -99,7 +102,7 @@ func NewHTTP(lc fx.Lifecycle, c Config, shutdown fx.Shutdowner, workers *Workers
 		}
 		result, err := s.Ledger(r.Context(), r.PathValue("id"), r.URL.Query().Get("cursor"), limit)
 		if err != nil {
-			handleError(w, err, logger)
+			handleError(w, r, err, logger)
 			return
 		}
 		writeJSON(w, 200, result)
@@ -110,7 +113,7 @@ func NewHTTP(lc fx.Lifecycle, c Config, shutdown fx.Shutdowner, workers *Workers
 		}
 		result, err := s.Reconcile(r.Context(), r.PathValue("id"))
 		if err != nil {
-			handleError(w, err, logger)
+			handleError(w, r, err, logger)
 			return
 		}
 		if !result.Consistent {
@@ -125,8 +128,11 @@ func NewHTTP(lc fx.Lifecycle, c Config, shutdown fx.Shutdowner, workers *Workers
 		if !decode(w, r, &input) {
 			return
 		}
+		meta := requestmeta.From(r.Context())
+		meta.WalletID = input.WalletID
+		r = r.WithContext(requestmeta.With(r.Context(), meta))
 		if err := input.Validate(); err != nil {
-			handleError(w, err, logger)
+			handleError(w, r, err, logger)
 			return
 		}
 		if input.ProviderID != identity.ProviderID {
@@ -135,7 +141,7 @@ func NewHTTP(lc fx.Lifecycle, c Config, shutdown fx.Shutdowner, workers *Workers
 		}
 		result, err := s.Apply(r.Context(), input, r.Header.Get("Idempotency-Key"))
 		if err != nil {
-			handleError(w, err, logger)
+			handleError(w, r, err, logger)
 			return
 		}
 		code := 200
@@ -157,7 +163,7 @@ func NewHTTP(lc fx.Lifecycle, c Config, shutdown fx.Shutdowner, workers *Workers
 		}
 		result, err := s.Transaction(r.Context(), identity.ProviderID, r.PathValue("id"), false)
 		if err != nil {
-			handleError(w, err, logger)
+			handleError(w, r, err, logger)
 			return
 		}
 		writeJSON(w, 200, result)
@@ -169,7 +175,7 @@ func NewHTTP(lc fx.Lifecycle, c Config, shutdown fx.Shutdowner, workers *Workers
 		}
 		result, err := s.Transaction(r.Context(), identity.ProviderID, r.PathValue("id"), true)
 		if err != nil {
-			handleError(w, err, logger)
+			handleError(w, r, err, logger)
 			return
 		}
 		writeJSON(w, 200, result)
@@ -259,7 +265,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 func writeError(w http.ResponseWriter, status int, code string) {
 	writeJSON(w, status, map[string]string{"code": code})
 }
-func handleError(w http.ResponseWriter, err error, logger *slog.Logger) {
+func handleError(w http.ResponseWriter, r *http.Request, err error, logger *slog.Logger) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, 404, "NOT_FOUND")
@@ -270,7 +276,14 @@ func handleError(w http.ResponseWriter, err error, logger *slog.Logger) {
 	case errors.Is(err, domain.ErrInvalidMoney), errors.Is(err, domain.ErrInvalidOperation), errors.Is(err, domain.ErrInvalidState), errors.Is(err, domain.ErrCurrency), errors.Is(err, domain.ErrOverflow):
 		writeError(w, 400, "INVALID_INPUT")
 	default:
-		logger.Error("operation unavailable", "errorType", fmtErrorType(err))
+		meta := requestmeta.From(r.Context())
+		if strings.Contains(r.Pattern, " /wallets/") {
+			meta.WalletID = r.PathValue("id")
+		}
+		if r.Pattern == "GET /wagering/transactions/{id}" {
+			meta.TransactionID = r.PathValue("id")
+		}
+		logger.Error("operation unavailable", "errorType", fmtErrorType(err), "correlationId", meta.CorrelationID, "walletId", meta.WalletID, "providerId", meta.ProviderID, "transactionId", meta.TransactionID)
 		w.Header().Set("Retry-After", "1")
 		writeError(w, 503, "TEMPORARILY_UNAVAILABLE")
 	}

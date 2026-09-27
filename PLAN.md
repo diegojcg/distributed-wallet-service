@@ -40,3 +40,5 @@ A migração dos metadados de correlação drena os triggers diferidos antes de 
 A política de reversão permite apenas uma reversão bem-sucedida por referência, mesmo entre REFUND e ROLLBACK. Não há commit intermediário de PENDING; PENDING_REFERENCE é retomável pelo banco. FAILED nunca é usado para timeout ou commit ambíguo.
 
 Publicação do repositório e envio de e-mail ficam fora da execução local. Diferenciais opcionais não implementados: partidas dobradas, tracing, dashboard e benchmark de capacidade com percentis.
+
+A revisão independente levou às correções de relógio, expiração de referências e consulta por UUID, além de novas provas de concorrência e recuperação. Decisões e execução estão em docs/REVIEW-FIXES.md.
