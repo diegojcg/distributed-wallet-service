@@ -51,3 +51,7 @@ A migração dos metadados de correlação também precisou drenar triggers dife
 A matriz em REQUIREMENTS.md identifica implementação e testes por requisito. Estes resultados demonstram os cenários exercitados; não são benchmark de capacidade nem certificação de produção. O emulador preserva estado no encerramento normal, sem promessa de durabilidade equivalente à AWS diante de crash do próprio broker. As limitações e os diferenciais opcionais não implementados estão em ARCHITECTURE.md.
 
 Logs detalhados ficam em work/, ignorados pelo Git. Nenhum repositório remoto foi publicado e nenhum e-mail foi enviado nesta execução.
+
+## Auditoria posterior
+
+Uma nova rodada completa e regressões adicionais foram executadas em 27/09/2026. Veja AUDIT.md para os resultados, as duas correções pontuais de HTTP, as provas adicionais de SQL/outbox e o smoke das imagens finais. MANUAL.md contém o roteiro para validação humana.

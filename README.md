@@ -143,8 +143,18 @@ Esse comando preserva volumes nomeados. O PostgreSQL guarda os dados financeiros
 make clean-check
 ```
 
-O script copia apenas os fontes para uma pasta temporária em work/, cria um projeto Compose exclusivo e volumes vazios, provisiona IAM/Keycloak/PostgreSQL, executa testes com race detector e sobe a imagem final com três réplicas. Remove apenas os volumes e containers que acabou de criar. A pasta copiada permanece para inspeção. Usa as portas 55433, 54567 e 58081; substitua com VERIFY_POSTGRES_PORT, VERIFY_SQS_PORT e VERIFY_KEYCLOAK_PORT se necessário. Requer também tar, curl e mktemp.
+O script copia apenas os fontes para uma pasta temporária em work/, cria um projeto Compose exclusivo e volumes vazios, provisiona IAM/Keycloak/PostgreSQL, executa testes com race detector e sobe a imagem final com três réplicas. Remove apenas os volumes e containers que acabou de criar. A pasta copiada permanece para inspeção. Usa as portas 55433, 54567 e 58081; substitua com VERIFY_POSTGRES_PORT, VERIFY_SQS_PORT e VERIFY_KEYCLOAK_PORT se necessário. Requer também tar, curl, mktemp e Python 3 para o smoke autenticado.
 
 As variáveis de aplicação estão em `.env.example`: DATABASE_URL, OIDC_ISSUER, OIDC_JWKS_URL, OIDC_AUDIENCE, HTTP_ADDR, SQS_ENDPOINT e BROKER_CREDENTIALS_FILE. Em Compose/scripts, POSTGRES_PORT, SQS_PORT e KEYCLOAK_PORT alteram as portas do ambiente; os defaults são 55432, 54566 e 58080. A aplicação recebe credenciais do worker por arquivo montado somente para leitura. Não utiliza as credenciais administrativas do bootstrap.
 
 Os requisitos obrigatórios e os limites da solução estão documentados em ARCHITECTURE.md e docs/REQUIREMENTS.md. Publicar o repositório e enviar o link ao recrutamento são passos externos à execução local.
+
+## Smoke autenticado e auditoria por camada
+
+Com as imagens já em execução, rode `python3 scripts/smoke.py` (Python 3 padrão, sem dependências extras). O script descobre as portas das três réplicas, obtém tokens locais e confere os cinco tipos externos, isolamento, replay histórico, paginação e reconciliação. Ele cria uma carteira de teste com UUID próprio e imprime seu ID; não apaga dados nem reinicia serviços. Para uma única instância use `SMOKE_BASE=http://127.0.0.1:<porta>`; `OIDC_ISSUER` pode substituir o issuer local.
+
+`go test ./internal/domain -fuzz=FuzzMoneyRoundTrip -fuzztime=20s` explora a serialização monetária. Para repetir apenas a auditoria de fronteiras e SQL, após provisionar um ambiente de testes dedicado, execute `./scripts/integration.sh -run 'TestHTTPBoundaryAudit|TestStorageAudit' -v`. O segundo teste usa um banco temporário e diferencia as restrições do usuário da aplicação dos triggers que também bloqueiam alterações pelo administrador.
+
+Consulte `docs/AUDIT.md` para a evidência adicional e `docs/MANUAL.md` para o roteiro de validação manual.
+
+Para uma regressão isolada após uma mudança pontual: `./scripts/clean-check.sh -run 'TestHTTPBoundaryAudit|TestStorageAudit'`. Sem argumentos, o script executa a integração completa. Nos dois casos, a imagem final recebe o smoke autenticado.

@@ -20,16 +20,16 @@ O texto original está em CHALLENGE.md. Caminhos abaixo são relativos à raiz d
 | Hash canônico, duas unicidades e saldo histórico (§9) | Operation.Hash; replay; constraints por provedor | TestOperationNormalization; 50DuplicatesAndHistoricalReplay; SQSAndHTTPIdempotency |
 | Concorrência distribuída e ausência de lost update (§5, §8) | SELECT FOR UPDATE por carteira, UPDATE com versão, schema | Two80BetsAcrossProcesses; 50DuplicatesAndHistoricalReplay, três processos reais |
 | Carteiras independentes (§5, §8) | Ausência de lock global no fluxo financeiro | IndependentWallets (uma carteira bloqueada); ParallelIndependentWallets (80 operações/8 carteiras) |
-| Ledger append-only e saldo consistente (§5–6) | REVOKE, triggers, unicidades e verificações diferidas; migration 003 | DatabaseGuards; falha SQL após atualização da operação em PermanentFailureAndPoisonMessages; reconciliações |
+| Ledger append-only e saldo consistente (§5–6) | REVOKE, triggers, unicidades e verificações diferidas; migration 003 | DatabaseGuards; TestStorageAudit; falha SQL após atualização da operação em PermanentFailureAndPoisonMessages; reconciliações |
 | Atomicidade domínio/inbox/outbox (§6.5, §10–11) | Store.run com uma transação SQL; auditoria FAILED independente após rollback | SQSAndHTTPIdempotency; SQSCommitBeforeACKCrash; PermanentFailureAndPoisonMessages |
 | Pendência, backoff, TTL e retomada (§7) | store/references.go + Evaluate; metadados persistidos | PendingReferenceRecovery; ReferenceExpiryAndRejectedReference; AllProcessesRestart |
 | Inbox conflituosa e deduplicação efetiva (§10) | Hash integral do envelope, PK consumer/messageId | Dez mensagens recebidas em SQSAndHTTPIdempotency; alteração do mesmo messageId chega à DLQ |
 | ACK após commit, redrive e liberação (§10) | workers.handleMessage, visibility 30s/processamento 10s/redrive 5 | TestSQSCommitBeforeACKCrash; poison/permanent failures; ciclos de stop |
-| Outbox concorrente, lease e retry (§11) | Claim SKIP LOCKED, lease 30s e token de confirmação | OutboxPublishedByConcurrentWorkers; PublishBeforeConfirmationCrash; BrokerUnavailableKeepsCommittedEvents |
+| Outbox concorrente, lease e retry (§11) | Claim SKIP LOCKED, lease 30s e token de confirmação | OutboxPublishedByConcurrentWorkers; PublishBeforeConfirmationCrash; TestStorageAudit/LeaseRecoveryAndStaleWorkerFencing; BrokerUnavailableKeepsCommittedEvents |
 | Eventos tipados e payload imutável (§11) | domain/events.go; guard_outbox; docs/EVENTS.md | TestOverflowOpeningLedgerAndEvents; CorrelationAndImmutableEventSnapshot |
 | Idempotência após perda da resposta (§3, §13) | Resultado persistido antes de responder | TestHTTPCommitCrash |
 | Reinício de todas as instâncias (§3, §13) | Estado financeiro, pendências e eventos no PostgreSQL | AllProcessesRestart; TestDependencyOutages com stop/restart total |
-| Contrato HTTP e paginação (§9) | platform/http.go; store/ledger.go; ARCHITECTURE.md | TestService; TestContracts; validação de cursor/limite no handler/store |
+| Contrato HTTP e paginação (§9) | platform/http.go; store/ledger.go; ARCHITECTURE.md | TestService; TestContracts; TestHTTPBoundaryAudit; smoke.py |
 | Reconciliação consistente e sem reparo (§9) | REPEATABLE READ READ ONLY, cálculo exato, log/contador | Two80BetsAcrossProcesses; ParallelIndependentWallets; ReconciliationReportsDriftWithoutRepair |
 | Health público e dependências (§9) | Ping PostgreSQL e consulta autenticada SQS | TestFxLifecycle; TestDependencyOutages; health das três réplicas finais |
 | Observabilidade (§12) | Logs JSON, métricas protegidas, correlação persistida | CorrelationAndImmutableEventSnapshot; ReconciliationReportsDriftWithoutRepair; métricas no teste de outage |

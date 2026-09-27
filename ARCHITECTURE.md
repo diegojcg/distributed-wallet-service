@@ -12,7 +12,7 @@ Wallet, WagerTransaction e WalletLedgerEntry têm estado privado, snapshots por 
 
 ## Transação SQL e concorrência
 
-O Store é a unidade de trabalho. Nenhum repositório aninhado abre uma transação independente. Cada operação confirma transação de negócio, saldo, ledger, outbox e, em SQS, inbox no mesmo commit. Não há commit intermediário de PENDING para operações sem dependências.
+O Store é o caso de uso transacional e a unidade de trabalho. A escolha concentra a coordenação SQL em um pacote, sem criar interfaces de repositório usadas por uma única implementação; em contrapartida, os testes dessa coordenação dependem de PostgreSQL real. As decisões financeiras são puras e pertencem ao domínio. Nenhum repositório aninhado abre uma transação independente. Cada operação confirma transação de negócio, saldo, ledger, outbox e, em SQS, inbox no mesmo commit. Não há commit intermediário de PENDING para operações sem dependências.
 
 READ COMMITTED + SELECT FOR UPDATE na carteira serializa alterações daquela carteira. Após adquirir o lock, o UPDATE também exige a versão lida. A ordem é carteira antes da alteração do registro da operação. Carteiras distintas não compartilham lock de aplicação. Deadlocks, indisponibilidade e timeout desfazem a tentativa e retornam retry/503; um erro de rede durante COMMIT pode ter resultado ambíguo, resolvido por nova consulta idempotente.
 
@@ -96,6 +96,8 @@ Não se promete exactly-once nem ordem global. Publishers concorrentes podem pub
 | Indisponibilidade transitória | 503 + Retry-After: 1 |
 
 Rejeições financeiras retornam transactionId, status, failureCode, saldo observado e idempotentReplay. Erros de transporte retornam `{ "code": "..." }`. A reconciliação usa REPEATABLE READ READ ONLY, incluindo abertura; diferença = saldo armazenado − soma do ledger. Não altera dados. Divergência é registrada em log e contador.
+
+UUIDs de rota aceitos pelo parser são normalizados para a forma canônica antes das consultas; o UUID nulo e entradas inválidas retornam 400. Operações sem campos de negócio obrigatórios retornam 400 antes da comparação de identidade, sem persistência.
 
 Ledger paginado por versão crescente, cursor base64url ligado à carteira e última versão, limite padrão 50/máximo 100. O cliente deve tratar o cursor como opaco.
 

@@ -74,7 +74,7 @@ func NewHTTP(lc fx.Lifecycle, c Config, shutdown fx.Shutdowner, workers *Workers
 		writeJSON(w, 201, result)
 	}))
 	mux.Handle("GET /wallets/{id}", protect("internal", func(w http.ResponseWriter, r *http.Request, _ auth.Identity) {
-		if !validID(w, r.PathValue("id")) {
+		if !validID(w, r) {
 			return
 		}
 		result, err := s.Wallet(r.Context(), r.PathValue("id"))
@@ -85,7 +85,7 @@ func NewHTTP(lc fx.Lifecycle, c Config, shutdown fx.Shutdowner, workers *Workers
 		writeJSON(w, 200, result)
 	}))
 	mux.Handle("GET /wallets/{id}/ledger", protect("internal", func(w http.ResponseWriter, r *http.Request, _ auth.Identity) {
-		if !validID(w, r.PathValue("id")) {
+		if !validID(w, r) {
 			return
 		}
 		limit := 50
@@ -105,7 +105,7 @@ func NewHTTP(lc fx.Lifecycle, c Config, shutdown fx.Shutdowner, workers *Workers
 		writeJSON(w, 200, result)
 	}))
 	mux.Handle("POST /wallets/{id}/reconciliation", protect("internal", func(w http.ResponseWriter, r *http.Request, _ auth.Identity) {
-		if !validID(w, r.PathValue("id")) {
+		if !validID(w, r) {
 			return
 		}
 		result, err := s.Reconcile(r.Context(), r.PathValue("id"))
@@ -123,6 +123,10 @@ func NewHTTP(lc fx.Lifecycle, c Config, shutdown fx.Shutdowner, workers *Workers
 
 		var input domain.Operation
 		if !decode(w, r, &input) {
+			return
+		}
+		if err := input.Validate(); err != nil {
+			handleError(w, err, logger)
 			return
 		}
 		if input.ProviderID != identity.ProviderID {
@@ -148,6 +152,9 @@ func NewHTTP(lc fx.Lifecycle, c Config, shutdown fx.Shutdowner, workers *Workers
 		writeJSON(w, code, result)
 	}))
 	mux.Handle("GET /wagering/transactions/{id}", protect("provider", func(w http.ResponseWriter, r *http.Request, identity auth.Identity) {
+		if !validID(w, r) {
+			return
+		}
 		result, err := s.Transaction(r.Context(), identity.ProviderID, r.PathValue("id"), false)
 		if err != nil {
 			handleError(w, err, logger)
@@ -221,11 +228,13 @@ func NewHTTP(lc fx.Lifecycle, c Config, shutdown fx.Shutdowner, workers *Workers
 	}})
 	return h
 }
-func validID(w http.ResponseWriter, id string) bool {
-	if _, err := uuid.Parse(id); err != nil {
+func validID(w http.ResponseWriter, r *http.Request) bool {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil || id == uuid.Nil {
 		writeError(w, 400, "INVALID_ID")
 		return false
 	}
+	r.SetPathValue("id", id.String())
 	return true
 }
 func decode(w http.ResponseWriter, r *http.Request, out any) bool {
