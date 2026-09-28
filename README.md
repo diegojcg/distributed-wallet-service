@@ -2,6 +2,8 @@
 
 Serviço Go para processamento distribuído de apostas, com dinheiro exato, PostgreSQL, OIDC, inbox/outbox e SQS. O enunciado original está em [docs/CHALLENGE.md](docs/CHALLENGE.md). Decisões e limitações estão em [ARCHITECTURE.md](ARCHITECTURE.md); andamento em [PLAN.md](PLAN.md). A matriz de cobertura está em [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) e a evidência de execução em [docs/VALIDATION.md](docs/VALIDATION.md).
 
+Collections importáveis, autenticação automática e roteiro de concorrência estão em [docs/postman/README.md](docs/postman/README.md).
+
 ## Pré-requisitos
 
 - Docker Engine e Docker Compose v2 com suporte a `--wait` (validado com Engine 25.0.2 / Compose 2.19.1).

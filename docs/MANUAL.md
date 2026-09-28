@@ -2,6 +2,8 @@
 
 Execute a partir da raiz do projeto. Os testes automatizados de falha usam infraestrutura descartável. Não rode `make integration` no ambiente que estiver usando manualmente: essa suíte para e reativa PostgreSQL/SQS para testar recuperação.
 
+Para executar pela interface do Postman, use as [collections e instruções de importação](postman/README.md).
+
 ## Preparação
 
 ```sh

@@ -1,0 +1,1925 @@
+{
+  "info": {
+    "_postman_id": "51b36026-f3aa-49fe-9dbc-12bb442ea301",
+    "name": "Jungle Wallet — roteiro manual",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Importe também o environment Jungle Wallet local. Execute na ordem 00–27, pelo Send ou Runner. Cada chamada protegida obtém um token novo no Keycloak; os IDs são salvos automaticamente. A requisição 02 inicia outra carteira. Ao fim: saldo 85.00, versão 5 e cinco lançamentos. Os testes negativos esperam 400/401/403/404/409/422 e devem aparecer como aprovados. O roteiro cria dados persistentes; não apaga dados nem reinicia serviços. Cobertura HTTP; concorrência, SQS e crashes permanecem na suíte Go."
+  },
+  "item": [
+    {
+      "name": "01 Preparação",
+      "item": [
+        {
+          "name": "00 Health live",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health/live",
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "01 Health ready",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health/ready",
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "02 Criar carteira — nova execução",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/wallets",
+            "description": "Execute esta requisição para iniciar ou reiniciar o roteiro. Gera outro jogador e carteira sem apagar os anteriores. Salva walletId e playerId automaticamente.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"playerId\": \"{{playerId}}\",\n  \"initialBalance\": {\n    \"amount\": \"100.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"runId\", pm.variables.replaceIn(\"{{$guid}}\"));",
+                  "pm.collectionVariables.set(\"playerId\", pm.variables.replaceIn(\"{{$guid}}\"));",
+                  "[\"walletId\", \"betTransactionId\", \"ledgerCursor\", \"ledgerIds\"].forEach(k => pm.collectionVariables.unset(k));",
+                  "const client = \"wallet-internal\";",
+                  "const secret = pm.environment.get(\"internalClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", function () { pm.response.to.have.status(201); });",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Saldo inicial e versão\", () => { pm.expect(r.balance.amount).to.eql(\"100.00\"); pm.expect(r.version).to.eql(1); });",
+                  "pm.test(\"ID da carteira\", () => pm.expect(r.id).to.be.a(\"string\").and.not.empty);",
+                  "pm.collectionVariables.set(\"walletId\", r.id);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 Fluxo financeiro — executar em ordem",
+      "item": [
+        {
+          "name": "03 BET 25 — saldo 75",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "idem-{{runId}}-bet"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"{{runId}}-bet\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"manual-round\",\n  \"gameId\": \"manual-game\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"25.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"provider-a\";",
+                  "const secret = pm.environment.get(\"providerClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Estado PROCESSED\", function () { pm.expect(r.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"Saldo 75.00\", function () { pm.expect(r.balance).to.deep.eql({amount:\"75.00\",currency:\"BRL\"}); });",
+                  "pm.test(\"Idempot\\u00eancia\", function () { pm.expect(r.idempotentReplay).to.eql(false); });",
+                  "pm.collectionVariables.set(\"betTransactionId\", r.transactionId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "04 WIN 10 — saldo 85",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "idem-{{runId}}-win"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"{{runId}}-win\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"manual-round\",\n  \"gameId\": \"manual-game\",\n  \"kind\": \"WIN\",\n  \"money\": {\n    \"amount\": \"10.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"provider-a\";",
+                  "const secret = pm.environment.get(\"providerClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Estado PROCESSED\", function () { pm.expect(r.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"Saldo 85.00\", function () { pm.expect(r.balance).to.deep.eql({amount:\"85.00\",currency:\"BRL\"}); });",
+                  "pm.test(\"Idempot\\u00eancia\", function () { pm.expect(r.idempotentReplay).to.eql(false); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "05 Replay do BET — saldo histórico 75",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "idem-{{runId}}-bet"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"{{runId}}-bet\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"manual-round\",\n  \"gameId\": \"manual-game\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"25.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"provider-a\";",
+                  "const secret = pm.environment.get(\"providerClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Estado PROCESSED\", function () { pm.expect(r.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"Saldo 75.00\", function () { pm.expect(r.balance).to.deep.eql({amount:\"75.00\",currency:\"BRL\"}); });",
+                  "pm.test(\"Idempot\\u00eancia\", function () { pm.expect(r.idempotentReplay).to.eql(true); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "06 Mesma chave com valor diferente — 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "idem-{{runId}}-bet"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"{{runId}}-bet\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"manual-round\",\n  \"gameId\": \"manual-game\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"26.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"provider-a\";",
+                  "const secret = pm.environment.get(\"providerClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 409\", function () { pm.response.to.have.status(409); });",
+                  "pm.test(\"Conflito\", function () { pm.expect(pm.response.json().code).to.eql(\"CONFLICT\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "07 REFUND do BET — saldo 110",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "idem-{{runId}}-refund"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"{{runId}}-refund\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"manual-round\",\n  \"gameId\": \"manual-game\",\n  \"kind\": \"REFUND\",\n  \"money\": {\n    \"amount\": \"25.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"{{runId}}-bet\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"provider-a\";",
+                  "const secret = pm.environment.get(\"providerClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Estado PROCESSED\", function () { pm.expect(r.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"Saldo 110.00\", function () { pm.expect(r.balance).to.deep.eql({amount:\"110.00\",currency:\"BRL\"}); });",
+                  "pm.test(\"Idempot\\u00eancia\", function () { pm.expect(r.idempotentReplay).to.eql(false); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "08 ROLLBACK do REFUND — saldo 85",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "idem-{{runId}}-rollback"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"{{runId}}-rollback\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"manual-round\",\n  \"gameId\": \"manual-game\",\n  \"kind\": \"ROLLBACK\",\n  \"money\": {\n    \"amount\": \"25.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"{{runId}}-refund\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"provider-a\";",
+                  "const secret = pm.environment.get(\"providerClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Estado PROCESSED\", function () { pm.expect(r.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"Saldo 85.00\", function () { pm.expect(r.balance).to.deep.eql({amount:\"85.00\",currency:\"BRL\"}); });",
+                  "pm.test(\"Idempot\\u00eancia\", function () { pm.expect(r.idempotentReplay).to.eql(false); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "09 LOSS — saldo 85",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "idem-{{runId}}-loss"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"{{runId}}-loss\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"manual-round\",\n  \"gameId\": \"manual-game\",\n  \"kind\": \"LOSS\",\n  \"money\": {\n    \"amount\": \"0.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"provider-a\";",
+                  "const secret = pm.environment.get(\"providerClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Estado PROCESSED\", function () { pm.expect(r.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"Saldo 85.00\", function () { pm.expect(r.balance).to.deep.eql({amount:\"85.00\",currency:\"BRL\"}); });",
+                  "pm.test(\"Idempot\\u00eancia\", function () { pm.expect(r.idempotentReplay).to.eql(false); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "10 Segunda reversão do BET — 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "idem-{{runId}}-another-refund"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"{{runId}}-another-refund\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"manual-round\",\n  \"gameId\": \"manual-game\",\n  \"kind\": \"REFUND\",\n  \"money\": {\n    \"amount\": \"25.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"{{runId}}-bet\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"provider-a\";",
+                  "const secret = pm.environment.get(\"providerClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 422\", function () { pm.response.to.have.status(422); });",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Estado REJECTED\", function () { pm.expect(r.status).to.eql(\"REJECTED\"); });",
+                  "pm.test(\"Saldo 85.00\", function () { pm.expect(r.balance).to.deep.eql({amount:\"85.00\",currency:\"BRL\"}); });",
+                  "pm.test(\"Idempot\\u00eancia\", function () { pm.expect(r.idempotentReplay).to.eql(false); });",
+                  "pm.test(\"C\\u00f3digo de rejei\\u00e7\\u00e3o\", function () { pm.expect(r.failureCode).to.eql(\"ALREADY_REVERSED\"); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 Consultas e auditoria",
+      "item": [
+        {
+          "name": "11 Carteira final",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{walletId}}",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"wallet-internal\";",
+                  "const secret = pm.environment.get(\"internalClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Saldo 85 e vers\\u00e3o 5\", function () { const r=pm.response.json(); pm.expect(r.balance).to.deep.eql({amount:\"85.00\",currency:\"BRL\"}); pm.expect(r.version).to.eql(5); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "12 Ledger — página 1",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{walletId}}/ledger?limit=2",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"wallet-internal\";",
+                  "const secret = pm.environment.get(\"internalClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const r=pm.response.json();",
+                  "pm.test(\"Quantidade na p\\u00e1gina\", function () { pm.expect(r.entries).to.have.length(2); });",
+                  "let ids = [];",
+                  "r.entries.forEach(e => ids.push(e.id));",
+                  "pm.test(\"Sem lan\\u00e7amentos repetidos\", function () { pm.expect(new Set(ids).size).to.eql(ids.length); });",
+                  "pm.collectionVariables.set(\"ledgerIds\", JSON.stringify(ids));",
+                  "pm.test(\"Pr\\u00f3xima p\\u00e1gina\", function () { pm.expect(r.nextCursor).to.be.a(\"string\").and.not.empty; });",
+                  "pm.collectionVariables.set(\"ledgerCursor\", r.nextCursor);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "13 Ledger — página 2",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{walletId}}/ledger?limit=2&cursor={{ledgerCursor}}",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"wallet-internal\";",
+                  "const secret = pm.environment.get(\"internalClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const r=pm.response.json();",
+                  "pm.test(\"Quantidade na p\\u00e1gina\", function () { pm.expect(r.entries).to.have.length(2); });",
+                  "let ids = JSON.parse(pm.collectionVariables.get(\"ledgerIds\") || \"[]\");",
+                  "r.entries.forEach(e => ids.push(e.id));",
+                  "pm.test(\"Sem lan\\u00e7amentos repetidos\", function () { pm.expect(new Set(ids).size).to.eql(ids.length); });",
+                  "pm.collectionVariables.set(\"ledgerIds\", JSON.stringify(ids));",
+                  "pm.test(\"Pr\\u00f3xima p\\u00e1gina\", function () { pm.expect(r.nextCursor).to.be.a(\"string\").and.not.empty; });",
+                  "pm.collectionVariables.set(\"ledgerCursor\", r.nextCursor);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "14 Ledger — página 3",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{walletId}}/ledger?limit=2&cursor={{ledgerCursor}}",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"wallet-internal\";",
+                  "const secret = pm.environment.get(\"internalClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const r=pm.response.json();",
+                  "pm.test(\"Quantidade na p\\u00e1gina\", function () { pm.expect(r.entries).to.have.length(1); });",
+                  "let ids = JSON.parse(pm.collectionVariables.get(\"ledgerIds\") || \"[]\");",
+                  "r.entries.forEach(e => ids.push(e.id));",
+                  "pm.test(\"Sem lan\\u00e7amentos repetidos\", function () { pm.expect(new Set(ids).size).to.eql(ids.length); });",
+                  "pm.collectionVariables.set(\"ledgerIds\", JSON.stringify(ids));",
+                  "pm.test(\"Cinco lan\\u00e7amentos, fim da pagina\\u00e7\\u00e3o\", function () { pm.expect(ids).to.have.length(5); pm.expect(r.nextCursor).to.be.undefined; });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "15 Reconciliação",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{walletId}}/reconciliation",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"wallet-internal\";",
+                  "const secret = pm.environment.get(\"internalClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Saldo reconciliado\", function () { const r=pm.response.json(); pm.expect(r.consistent).to.eql(true); pm.expect(r.storedBalance.amount).to.eql(\"85.00\"); pm.expect(r.calculatedBalance.amount).to.eql(\"85.00\"); pm.expect(r.difference.amount).to.eql(\"0.00\"); pm.expect(r.checkedEntries).to.eql(5); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "16 Consultar BET pelo ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wagering/transactions/{{betTransactionId}}",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"provider-a\";",
+                  "const secret = pm.environment.get(\"providerClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Estado PROCESSED\", function () { pm.expect(r.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"Saldo 75.00\", function () { pm.expect(r.balance).to.deep.eql({amount:\"75.00\",currency:\"BRL\"}); });",
+                  "pm.test(\"Idempot\\u00eancia\", function () { pm.expect(r.idempotentReplay).to.eql(false); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "17 Consultar BET pelo ID externo",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/providers/provider-a/wagering/transactions/{{runId}}-bet",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"provider-a\";",
+                  "const secret = pm.environment.get(\"providerClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Estado PROCESSED\", function () { pm.expect(r.status).to.eql(\"PROCESSED\"); });",
+                  "pm.test(\"Saldo 75.00\", function () { pm.expect(r.balance).to.deep.eql({amount:\"75.00\",currency:\"BRL\"}); });",
+                  "pm.test(\"Idempot\\u00eancia\", function () { pm.expect(r.idempotentReplay).to.eql(false); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 Contratos negativos e observabilidade",
+      "item": [
+        {
+          "name": "18 Sem token — 401",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{walletId}}",
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 401\", function () { pm.response.to.have.status(401); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "19 Provider abrindo carteira — 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/wallets",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"playerId\": \"{{playerId}}\",\n  \"initialBalance\": {\n    \"amount\": \"100.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"provider-a\";",
+                  "const secret = pm.environment.get(\"providerClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 403\", function () { pm.response.to.have.status(403); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "20 Outro provider consultando BET — 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wagering/transactions/{{betTransactionId}}",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"provider-b\";",
+                  "const secret = pm.environment.get(\"otherClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 404\", function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "21 Abertura duplicada — 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/wallets",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"playerId\": \"{{playerId}}\",\n  \"initialBalance\": {\n    \"amount\": \"100.00\",\n    \"currency\": \"BRL\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"wallet-internal\";",
+                  "const secret = pm.environment.get(\"internalClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 409\", function () { pm.response.to.have.status(409); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "22 Sem Idempotency-Key — 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"{{runId}}-missing-key\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"manual-round\",\n  \"gameId\": \"manual-game\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"1.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"provider-a\";",
+                  "const secret = pm.environment.get(\"providerClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "23 Dinheiro numérico em JSON — 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "idem-{{runId}}-invalid"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"{{runId}}-invalid-money\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"manual-round\",\n  \"gameId\": \"manual-game\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": 1,\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"provider-a\";",
+                  "const secret = pm.environment.get(\"providerClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "24 Cursor inválido — 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{walletId}}/ledger?cursor=invalido",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"wallet-internal\";",
+                  "const secret = pm.environment.get(\"internalClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "25 BET sem saldo — 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "idem-{{runId}}-insufficient"
+              }
+            ],
+            "url": "{{baseUrl}}/wagering/transactions",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"providerId\": \"provider-a\",\n  \"externalTransactionId\": \"{{runId}}-insufficient\",\n  \"playerId\": \"{{playerId}}\",\n  \"walletId\": \"{{walletId}}\",\n  \"roundId\": \"manual-round\",\n  \"gameId\": \"manual-game\",\n  \"kind\": \"BET\",\n  \"money\": {\n    \"amount\": \"1000.00\",\n    \"currency\": \"BRL\"\n  },\n  \"referenceExternalTransactionId\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"provider-a\";",
+                  "const secret = pm.environment.get(\"providerClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 422\", function () { pm.response.to.have.status(422); });",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Estado REJECTED\", function () { pm.expect(r.status).to.eql(\"REJECTED\"); });",
+                  "pm.test(\"Saldo 85.00\", function () { pm.expect(r.balance).to.deep.eql({amount:\"85.00\",currency:\"BRL\"}); });",
+                  "pm.test(\"Idempot\\u00eancia\", function () { pm.expect(r.idempotentReplay).to.eql(false); });",
+                  "pm.test(\"C\\u00f3digo de rejei\\u00e7\\u00e3o\", function () { pm.expect(r.failureCode).to.eql(\"INSUFFICIENT_FUNDS\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "26 Carteira permanece em 85",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/{{walletId}}",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"walletId\")) throw new Error(\"Execute primeiro 02 Criar carteira, depois siga a ordem numerada.\");",
+                  "",
+                  "const client = \"wallet-internal\";",
+                  "const secret = pm.environment.get(\"internalClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"Saldo 85 e vers\\u00e3o 5\", function () { const r=pm.response.json(); pm.expect(r.balance).to.deep.eql({amount:\"85.00\",currency:\"BRL\"}); pm.expect(r.version).to.eql(5); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "27 Métricas autenticadas",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/metrics",
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const client = \"metrics-reader\";",
+                  "const secret = pm.environment.get(\"metricsClientSecret\");",
+                  "if (!secret) throw new Error(\"Selecione o environment Jungle Wallet local e configure o secret do client.\");",
+                  "pm.sendRequest({",
+                  "  url: pm.environment.get(\"keycloakUrl\") + \"/realms/jungle/protocol/openid-connect/token\",",
+                  "  method: \"POST\",",
+                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                  "  body: {mode: \"urlencoded\", urlencoded: [",
+                  "    {key: \"grant_type\", value: \"client_credentials\"},",
+                  "    {key: \"client_id\", value: client},",
+                  "    {key: \"client_secret\", value: secret}",
+                  "  ]}",
+                  "}, function (err, response) {",
+                  "  if (err) throw new Error(\"Não foi possível acessar o Keycloak: \" + err.message);",
+                  "  if (response.code !== 200) throw new Error(\"Keycloak retornou HTTP \" + response.code);",
+                  "  const token = response.json().access_token;",
+                  "  if (!token) throw new Error(\"Keycloak não retornou access_token.\");",
+                  "  pm.variables.set(\"accessToken\", token);",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"M\\u00e9tricas de transa\\u00e7\\u00f5es\", function () { pm.expect(pm.response.text()).to.include(\"wallet_transactions_total\"); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "runId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "playerId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "walletId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "betTransactionId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "ledgerCursor",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "ledgerIds",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}
