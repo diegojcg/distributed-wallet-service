@@ -2,7 +2,7 @@
 
 ## Escopo e estado
 
-Serviço de carteiras em Go 1.27.1, PostgreSQL 17, pgx com SQL explícito, Uber Fx, Keycloak e SQS em MiniStack. O enunciado original está em `docs/CHALLENGE.md`; o acompanhamento de execução e lacunas fica em `PLAN.md`. Não há chamadas para AWS real.
+Serviço de carteiras em Go 1.27.1, PostgreSQL 17, pgx com SQL explícito, Uber Fx, Keycloak e SQS em MiniStack. O enunciado original está em `docs/CHALLENGE.md`; a cobertura dos requisitos está em `docs/REQUIREMENTS.md`. Não há chamadas para AWS real.
 
 ## Dinheiro e domínio
 
@@ -133,7 +133,7 @@ Labels têm conjuntos controlados; IDs não são labels. Métricas de filas/pend
 
 ## Limites e operação
 
-O ambiente é local, usa HTTP e credenciais demonstrativas; não é um template pronto para produção. O broker é um emulador, Keycloak usa start-dev, as tabelas de auditoria não têm política de retenção e a verificação do histórico cresce com o ledger. A moeda operacional é BRL e a política de reversão impede uma segunda reversão da mesma referência, inclusive de outro tipo. Essas são decisões explícitas; nenhum requisito obrigatório permanece marcado apenas como planejado.
+O ambiente é local, usa HTTP e credenciais demonstrativas; não é um template pronto para produção. O broker é um emulador, Keycloak usa start-dev, as tabelas de auditoria não têm política de retenção e a verificação do histórico cresce com o ledger. A moeda operacional é BRL e a política de reversão impede uma segunda reversão da mesma referência, inclusive de outro tipo. A cobertura dos requisitos obrigatórios está documentada em `docs/REQUIREMENTS.md`.
 
 ## Referências técnicas
 

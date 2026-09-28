@@ -1,6 +1,6 @@
 # Jungle Wallet Service
 
-Serviço Go para processamento distribuído de apostas, com dinheiro exato, PostgreSQL, OIDC, inbox/outbox e SQS. O enunciado original está em [docs/CHALLENGE.md](docs/CHALLENGE.md). Decisões e limitações estão em [ARCHITECTURE.md](ARCHITECTURE.md); andamento em [PLAN.md](PLAN.md). A matriz de cobertura está em [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) e a evidência de execução em [docs/VALIDATION.md](docs/VALIDATION.md).
+Serviço Go para processamento distribuído de apostas, com dinheiro exato, PostgreSQL, OIDC, inbox/outbox e SQS. O enunciado original está em [docs/CHALLENGE.md](docs/CHALLENGE.md). Decisões e limitações estão em [ARCHITECTURE.md](ARCHITECTURE.md). A matriz de cobertura está em [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) e a evidência de execução em [docs/VALIDATION.md](docs/VALIDATION.md).
 
 Collections importáveis, autenticação automática e roteiro de concorrência estão em [docs/postman/README.md](docs/postman/README.md).
 
@@ -149,7 +149,7 @@ O script copia apenas os fontes para uma pasta temporária em work/, cria um pro
 
 As variáveis de aplicação estão em `.env.example`: DATABASE_URL, OIDC_ISSUER, OIDC_JWKS_URL, OIDC_AUDIENCE, HTTP_ADDR, SQS_ENDPOINT e BROKER_CREDENTIALS_FILE. Em Compose/scripts, POSTGRES_PORT, SQS_PORT e KEYCLOAK_PORT alteram as portas do ambiente; os defaults são 55432, 54566 e 58080. A aplicação recebe credenciais do worker por arquivo montado somente para leitura. Não utiliza as credenciais administrativas do bootstrap.
 
-Os requisitos obrigatórios e os limites da solução estão documentados em ARCHITECTURE.md e docs/REQUIREMENTS.md. Publicar o repositório e enviar o link ao recrutamento são passos externos à execução local.
+Os requisitos obrigatórios e os limites da solução estão documentados em ARCHITECTURE.md e docs/REQUIREMENTS.md.
 
 ## Smoke autenticado e auditoria por camada
 
@@ -157,6 +157,6 @@ Com as imagens já em execução, rode `python3 scripts/smoke.py` (Python 3 padr
 
 `go test ./internal/domain -fuzz=FuzzMoneyRoundTrip -fuzztime=20s` explora a serialização monetária. Para repetir apenas a auditoria de fronteiras e SQL, após provisionar um ambiente de testes dedicado, execute `./scripts/integration.sh -run 'TestHTTPBoundaryAudit|TestStorageAudit' -v`. O segundo teste usa um banco temporário e diferencia as restrições do usuário da aplicação dos triggers que também bloqueiam alterações pelo administrador.
 
-Consulte `docs/REVIEW-FIXES.md` para as correções e provas da revisão independente, `docs/AUDIT.md` para a auditoria anterior e `docs/MANUAL.md` para o roteiro de validação manual.
+Consulte [docs/VALIDATION.md](docs/VALIDATION.md) para os resultados dos testes e [docs/MANUAL.md](docs/MANUAL.md) para o roteiro de validação manual.
 
 Para uma regressão isolada após uma mudança pontual: `./scripts/clean-check.sh -run 'TestHTTPBoundaryAudit|TestStorageAudit'`. Sem argumentos, o script executa a integração completa. Nos dois casos, a imagem final recebe o smoke autenticado.
