@@ -1,9 +1,9 @@
 {
   "info": {
     "_postman_id": "2793ce70-9954-4fbb-804f-8962460c47d5",
-    "name": "Jungle Wallet — concorrência HTTP",
+    "name": "Distributed Wallet — HTTP concurrency",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "Use o environment Jungle Wallet local existente. Cada item cria carteiras próprias, dispara requisições HTTP em paralelo via pm.sendRequest/Promise.all e verifica o estado final. Pode usar Send ou Run collection com 1–5 iterações. replicaUrls é opcional: lista de URLs separadas por vírgula; sem ela usa baseUrl. São testes de correção sob disputa, não um benchmark: o GET de health é somente o ponto de partida, a carga real está no script após a resposta. Veja o Console e os resultados dos testes. Cria 12 carteiras por iteração e não apaga dados. Não usa os IDs da collection manual nem interrompe dependências."
+    "description": "Use the Distributed Wallet local environment. Each item creates its own wallets, sends parallel HTTP requests with pm.sendRequest/Promise.all, and verifies the final state. Use Send or Run collection with 1–5 iterations. Optional replicaUrls is a comma-separated URL list; an empty value uses baseUrl. These are correctness checks under contention, not a benchmark: the health GET starts the post-response script that performs the actual workload. Inspect Console and Test Results. Creates 12 wallets per iteration and preserves data. It does not reuse manual-collection IDs or interrupt dependencies."
   },
   "variable": [
     {
@@ -14,14 +14,14 @@
   ],
   "item": [
     {
-      "name": "01 Duas apostas de 80 sobre saldo 100",
+      "name": "01 Two bets of 80 against a balance of 100",
       "request": {
         "method": "GET",
         "url": "{{baseUrl}}/health/ready",
         "auth": {
           "type": "noauth"
         },
-        "description": "Clique Send para executar o cenário inteiro. O script após a resposta faz autenticação, preparação, envio paralelo e verificações. Consulte Test Results e Console."
+        "description": "Click Send to run the entire scenario. The post-response script handles authentication, setup, parallel requests, and verification. Inspect Test Results and Console."
       },
       "event": [
         {
@@ -29,7 +29,7 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test(\"API pronta\", () => pm.response.to.have.status(200));",
+              "pm.test(\"API ready\", () => pm.response.to.have.status(200));",
               "(async function () {",
               "  const base = pm.environment.get(\"baseUrl\");",
               "  const urls = (pm.variables.get(\"replicaUrls\") || base).split(\",\").map(x => x.trim().replace(/\\/$/, \"\")).filter(Boolean);",
@@ -58,7 +58,7 @@
               "    }, (err, response) => {",
               "      if (err) return reject(err);",
               "      if (response.code !== 200) return reject(new Error(\"Token \" + client + \": HTTP \" + response.code));",
-              "      try { const value=response.json().access_token; if(!value) throw new Error(\"Token ausente\"); resolve(value); } catch(e) { reject(e); }",
+              "      try { const value=response.json().access_token; if(!value) throw new Error(\"Missing token\"); resolve(value); } catch(e) { reject(e); }",
               "    }));",
               "  }",
               "  const [internal, provider] = await Promise.all([",
@@ -71,7 +71,7 @@
               "  async function wallet() {",
               "    const playerId=guid();",
               "    const response=await send(urls[0]+\"/wallets\", \"POST\", internal, {playerId, initialBalance:{amount:\"100.00\",currency:\"BRL\"}});",
-              "    status(response,201,\"Carteira criada\");",
+              "    status(response,201,\"Wallet created\");",
               "    return {id:response.body.id, playerId};",
               "  }",
               "  function operation(w, kind, amount, reference) {",
@@ -85,15 +85,15 @@
               "  async function verify(w, balance, version, entries) {",
               "    const results = await Promise.all(urls.map(url => send(url+\"/wallets/\"+w.id,\"GET\",internal)));",
               "    results.forEach((r,i) => {",
-              "      status(r,200,\"Consulta na réplica \"+(i+1));",
-              "      pm.test(\"Saldo e versão na réplica \"+(i+1), () => {",
+              "      status(r,200,\"Query on replica \"+(i+1));",
+              "      pm.test(\"Balance and version on replica \"+(i+1), () => {",
               "        pm.expect(r.body.balance).to.deep.eql({amount:balance,currency:\"BRL\"});",
               "        pm.expect(r.body.version).to.eql(version);",
               "      });",
               "    });",
               "    const ledger=await send(urls[0]+\"/wallets/\"+w.id+\"/ledger?limit=100\",\"GET\",internal);",
-              "    status(ledger,200,\"Ledger disponível\");",
-              "    pm.test(\"Ledger sem duplicação e soma correta\", () => {",
+              "    status(ledger,200,\"Ledger available\");",
+              "    pm.test(\"Ledger has no duplicates and the sum is correct\", () => {",
               "      pm.expect(ledger.body.entries).to.have.length(entries);",
               "      pm.expect(ledger.body.nextCursor).to.be.undefined;",
               "      pm.expect(new Set(ledger.body.entries.map(e=>e.transactionId)).size).to.eql(entries);",
@@ -101,26 +101,26 @@
               "      pm.expect(sum).to.eql(Number(balance.replace(\".\",\"\")));",
               "    });",
               "    const rec=await send(urls[0]+\"/wallets/\"+w.id+\"/reconciliation\",\"POST\",internal);",
-              "    status(rec,200,\"Reconciliação disponível\");",
-              "    pm.test(\"Reconciliação consistente\",()=>{",
+              "    status(rec,200,\"Reconciliation available\");",
+              "    pm.test(\"Consistent reconciliation\",()=>{",
               "      pm.expect(rec.body.consistent).to.eql(true);",
               "      pm.expect(rec.body.difference.amount).to.eql(\"0.00\");",
               "      pm.expect(rec.body.storedBalance.amount).to.eql(balance);",
               "      pm.expect(rec.body.calculatedBalance.amount).to.eql(balance);",
               "      pm.expect(rec.body.checkedEntries).to.eql(entries);",
               "    });",
-              "    console.log(\"Carteira do cenário\", {walletId:w.id, balance, version, entries, replicas:urls.length});",
+              "    console.log(\"Scenario wallet\", {walletId:w.id, balance, version, entries, replicas:urls.length});",
               "  }",
               "",
               "  const w=await wallet();",
               "  const ops=[operation(w,\"BET\",\"80.00\"),operation(w,\"BET\",\"80.00\")];",
               "  const results=await Promise.all(ops.map((op,i)=>wager(op,i)));",
-              "  pm.test(\"Exatamente uma aceita e uma rejeitada\",()=>{",
+              "  pm.test(\"Exactly one accepted and one rejected\",()=>{",
               "    pm.expect(results.map(r=>r.code).sort()).to.deep.eql([200,422]);",
               "    pm.expect(results.find(r=>r.code===422).body.failureCode).to.eql(\"INSUFFICIENT_FUNDS\");",
               "  });",
               "  const replays=await Promise.all(ops.map((op,i)=>wager(op,i+1)));",
-              "  pm.test(\"Reenvios preservam ambos os resultados\",()=>replays.forEach((r,i)=>{",
+              "  pm.test(\"Replays preserve both results\",()=>replays.forEach((r,i)=>{",
               "    pm.expect(r.code).to.eql(results[i].code);",
               "    pm.expect(r.body.idempotentReplay).to.eql(true);",
               "    pm.expect(r.body.transactionId).to.eql(results[i].body.transactionId);",
@@ -131,7 +131,7 @@
               "  await verify(w,\"20.00\",2,2);",
               "",
               "})().catch(error => {",
-              "  pm.test(\"Cenário terminou sem erro de execução\", () => { throw error; });",
+              "  pm.test(\"Scenario completed without execution errors\", () => { throw error; });",
               "});"
             ]
           }
@@ -139,14 +139,14 @@
       ]
     },
     {
-      "name": "02 Cinquenta cópias da mesma aposta",
+      "name": "02 Fifty copies of the same bet",
       "request": {
         "method": "GET",
         "url": "{{baseUrl}}/health/ready",
         "auth": {
           "type": "noauth"
         },
-        "description": "Clique Send para executar o cenário inteiro. O script após a resposta faz autenticação, preparação, envio paralelo e verificações. Consulte Test Results e Console."
+        "description": "Click Send to run the entire scenario. The post-response script handles authentication, setup, parallel requests, and verification. Inspect Test Results and Console."
       },
       "event": [
         {
@@ -154,7 +154,7 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test(\"API pronta\", () => pm.response.to.have.status(200));",
+              "pm.test(\"API ready\", () => pm.response.to.have.status(200));",
               "(async function () {",
               "  const base = pm.environment.get(\"baseUrl\");",
               "  const urls = (pm.variables.get(\"replicaUrls\") || base).split(\",\").map(x => x.trim().replace(/\\/$/, \"\")).filter(Boolean);",
@@ -183,7 +183,7 @@
               "    }, (err, response) => {",
               "      if (err) return reject(err);",
               "      if (response.code !== 200) return reject(new Error(\"Token \" + client + \": HTTP \" + response.code));",
-              "      try { const value=response.json().access_token; if(!value) throw new Error(\"Token ausente\"); resolve(value); } catch(e) { reject(e); }",
+              "      try { const value=response.json().access_token; if(!value) throw new Error(\"Missing token\"); resolve(value); } catch(e) { reject(e); }",
               "    }));",
               "  }",
               "  const [internal, provider] = await Promise.all([",
@@ -196,7 +196,7 @@
               "  async function wallet() {",
               "    const playerId=guid();",
               "    const response=await send(urls[0]+\"/wallets\", \"POST\", internal, {playerId, initialBalance:{amount:\"100.00\",currency:\"BRL\"}});",
-              "    status(response,201,\"Carteira criada\");",
+              "    status(response,201,\"Wallet created\");",
               "    return {id:response.body.id, playerId};",
               "  }",
               "  function operation(w, kind, amount, reference) {",
@@ -210,15 +210,15 @@
               "  async function verify(w, balance, version, entries) {",
               "    const results = await Promise.all(urls.map(url => send(url+\"/wallets/\"+w.id,\"GET\",internal)));",
               "    results.forEach((r,i) => {",
-              "      status(r,200,\"Consulta na réplica \"+(i+1));",
-              "      pm.test(\"Saldo e versão na réplica \"+(i+1), () => {",
+              "      status(r,200,\"Query on replica \"+(i+1));",
+              "      pm.test(\"Balance and version on replica \"+(i+1), () => {",
               "        pm.expect(r.body.balance).to.deep.eql({amount:balance,currency:\"BRL\"});",
               "        pm.expect(r.body.version).to.eql(version);",
               "      });",
               "    });",
               "    const ledger=await send(urls[0]+\"/wallets/\"+w.id+\"/ledger?limit=100\",\"GET\",internal);",
-              "    status(ledger,200,\"Ledger disponível\");",
-              "    pm.test(\"Ledger sem duplicação e soma correta\", () => {",
+              "    status(ledger,200,\"Ledger available\");",
+              "    pm.test(\"Ledger has no duplicates and the sum is correct\", () => {",
               "      pm.expect(ledger.body.entries).to.have.length(entries);",
               "      pm.expect(ledger.body.nextCursor).to.be.undefined;",
               "      pm.expect(new Set(ledger.body.entries.map(e=>e.transactionId)).size).to.eql(entries);",
@@ -226,21 +226,21 @@
               "      pm.expect(sum).to.eql(Number(balance.replace(\".\",\"\")));",
               "    });",
               "    const rec=await send(urls[0]+\"/wallets/\"+w.id+\"/reconciliation\",\"POST\",internal);",
-              "    status(rec,200,\"Reconciliação disponível\");",
-              "    pm.test(\"Reconciliação consistente\",()=>{",
+              "    status(rec,200,\"Reconciliation available\");",
+              "    pm.test(\"Consistent reconciliation\",()=>{",
               "      pm.expect(rec.body.consistent).to.eql(true);",
               "      pm.expect(rec.body.difference.amount).to.eql(\"0.00\");",
               "      pm.expect(rec.body.storedBalance.amount).to.eql(balance);",
               "      pm.expect(rec.body.calculatedBalance.amount).to.eql(balance);",
               "      pm.expect(rec.body.checkedEntries).to.eql(entries);",
               "    });",
-              "    console.log(\"Carteira do cenário\", {walletId:w.id, balance, version, entries, replicas:urls.length});",
+              "    console.log(\"Scenario wallet\", {walletId:w.id, balance, version, entries, replicas:urls.length});",
               "  }",
               "",
               "  const w=await wallet();",
               "  const bet=operation(w,\"BET\",\"25.00\");",
               "  const results=await Promise.all(Array.from({length:50},(_,i)=>wager(bet,i)));",
-              "  pm.test(\"50 respostas, uma única transação e um único processamento\",()=>{",
+              "  pm.test(\"50 responses, one transaction, one processing result\",()=>{",
               "    pm.expect(results).to.have.length(50);",
               "    results.forEach(r=>{pm.expect(r.code).to.eql(200);pm.expect(r.body.status).to.eql(\"PROCESSED\");pm.expect(r.body.balance.amount).to.eql(\"75.00\");});",
               "    pm.expect(new Set(results.map(r=>r.body.transactionId)).size).to.eql(1);",
@@ -248,14 +248,14 @@
               "    pm.expect(results.filter(r=>r.body.idempotentReplay===true)).to.have.length(49);",
               "  });",
               "  await verify(w,\"75.00\",2,2);",
-              "  status(await wager(operation(w,\"WIN\",\"10.00\")),200,\"WIN posterior aceito\");",
+              "  status(await wager(operation(w,\"WIN\",\"10.00\")),200,\"Subsequent WIN accepted\");",
               "  const replay=await wager(bet,1);",
-              "  status(replay,200,\"Replay posterior aceito\");",
-              "  pm.test(\"Replay mantém saldo histórico\",()=>{pm.expect(replay.body.balance.amount).to.eql(\"75.00\");pm.expect(replay.body.idempotentReplay).to.eql(true);});",
+              "  status(replay,200,\"Subsequent replay accepted\");",
+              "  pm.test(\"Replay preserves historical balance\",()=>{pm.expect(replay.body.balance.amount).to.eql(\"75.00\");pm.expect(replay.body.idempotentReplay).to.eql(true);});",
               "  await verify(w,\"85.00\",3,3);",
               "",
               "})().catch(error => {",
-              "  pm.test(\"Cenário terminou sem erro de execução\", () => { throw error; });",
+              "  pm.test(\"Scenario completed without execution errors\", () => { throw error; });",
               "});"
             ]
           }
@@ -263,14 +263,14 @@
       ]
     },
     {
-      "name": "03 Mesma chave com dois valores diferentes",
+      "name": "03 Same key with two different amounts",
       "request": {
         "method": "GET",
         "url": "{{baseUrl}}/health/ready",
         "auth": {
           "type": "noauth"
         },
-        "description": "Clique Send para executar o cenário inteiro. O script após a resposta faz autenticação, preparação, envio paralelo e verificações. Consulte Test Results e Console."
+        "description": "Click Send to run the entire scenario. The post-response script handles authentication, setup, parallel requests, and verification. Inspect Test Results and Console."
       },
       "event": [
         {
@@ -278,7 +278,7 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test(\"API pronta\", () => pm.response.to.have.status(200));",
+              "pm.test(\"API ready\", () => pm.response.to.have.status(200));",
               "(async function () {",
               "  const base = pm.environment.get(\"baseUrl\");",
               "  const urls = (pm.variables.get(\"replicaUrls\") || base).split(\",\").map(x => x.trim().replace(/\\/$/, \"\")).filter(Boolean);",
@@ -307,7 +307,7 @@
               "    }, (err, response) => {",
               "      if (err) return reject(err);",
               "      if (response.code !== 200) return reject(new Error(\"Token \" + client + \": HTTP \" + response.code));",
-              "      try { const value=response.json().access_token; if(!value) throw new Error(\"Token ausente\"); resolve(value); } catch(e) { reject(e); }",
+              "      try { const value=response.json().access_token; if(!value) throw new Error(\"Missing token\"); resolve(value); } catch(e) { reject(e); }",
               "    }));",
               "  }",
               "  const [internal, provider] = await Promise.all([",
@@ -320,7 +320,7 @@
               "  async function wallet() {",
               "    const playerId=guid();",
               "    const response=await send(urls[0]+\"/wallets\", \"POST\", internal, {playerId, initialBalance:{amount:\"100.00\",currency:\"BRL\"}});",
-              "    status(response,201,\"Carteira criada\");",
+              "    status(response,201,\"Wallet created\");",
               "    return {id:response.body.id, playerId};",
               "  }",
               "  function operation(w, kind, amount, reference) {",
@@ -334,15 +334,15 @@
               "  async function verify(w, balance, version, entries) {",
               "    const results = await Promise.all(urls.map(url => send(url+\"/wallets/\"+w.id,\"GET\",internal)));",
               "    results.forEach((r,i) => {",
-              "      status(r,200,\"Consulta na réplica \"+(i+1));",
-              "      pm.test(\"Saldo e versão na réplica \"+(i+1), () => {",
+              "      status(r,200,\"Query on replica \"+(i+1));",
+              "      pm.test(\"Balance and version on replica \"+(i+1), () => {",
               "        pm.expect(r.body.balance).to.deep.eql({amount:balance,currency:\"BRL\"});",
               "        pm.expect(r.body.version).to.eql(version);",
               "      });",
               "    });",
               "    const ledger=await send(urls[0]+\"/wallets/\"+w.id+\"/ledger?limit=100\",\"GET\",internal);",
-              "    status(ledger,200,\"Ledger disponível\");",
-              "    pm.test(\"Ledger sem duplicação e soma correta\", () => {",
+              "    status(ledger,200,\"Ledger available\");",
+              "    pm.test(\"Ledger has no duplicates and the sum is correct\", () => {",
               "      pm.expect(ledger.body.entries).to.have.length(entries);",
               "      pm.expect(ledger.body.nextCursor).to.be.undefined;",
               "      pm.expect(new Set(ledger.body.entries.map(e=>e.transactionId)).size).to.eql(entries);",
@@ -350,15 +350,15 @@
               "      pm.expect(sum).to.eql(Number(balance.replace(\".\",\"\")));",
               "    });",
               "    const rec=await send(urls[0]+\"/wallets/\"+w.id+\"/reconciliation\",\"POST\",internal);",
-              "    status(rec,200,\"Reconciliação disponível\");",
-              "    pm.test(\"Reconciliação consistente\",()=>{",
+              "    status(rec,200,\"Reconciliation available\");",
+              "    pm.test(\"Consistent reconciliation\",()=>{",
               "      pm.expect(rec.body.consistent).to.eql(true);",
               "      pm.expect(rec.body.difference.amount).to.eql(\"0.00\");",
               "      pm.expect(rec.body.storedBalance.amount).to.eql(balance);",
               "      pm.expect(rec.body.calculatedBalance.amount).to.eql(balance);",
               "      pm.expect(rec.body.checkedEntries).to.eql(entries);",
               "    });",
-              "    console.log(\"Carteira do cenário\", {walletId:w.id, balance, version, entries, replicas:urls.length});",
+              "    console.log(\"Scenario wallet\", {walletId:w.id, balance, version, entries, replicas:urls.length});",
               "  }",
               "",
               "  const w=await wallet();",
@@ -366,21 +366,21 @@
               "  const second=JSON.parse(JSON.stringify(first));second.money.amount=\"30.00\";",
               "  const ops=[first,second];",
               "  const results=await Promise.all(ops.map((op,i)=>wager(op,i)));",
-              "  pm.test(\"Um processamento e um conflito\",()=>{",
+              "  pm.test(\"One processing result and one conflict\",()=>{",
               "    pm.expect(results.map(r=>r.code).sort()).to.deep.eql([200,409]);",
               "    pm.expect(results.find(r=>r.code===409).body.code).to.eql(\"CONFLICT\");",
               "  });",
               "  const winner=results.findIndex(r=>r.code===200);",
-              "  if(winner<0) throw new Error(\"Nenhum vencedor\");",
+              "  if(winner<0) throw new Error(\"No winner\");",
               "  const balance=winner===0?\"75.00\":\"70.00\";",
               "  const replay=await wager(ops[winner]);",
-              "  status(replay,200,\"Replay do vencedor\");",
-              "  pm.test(\"Resultado vencedor persistido\",()=>{pm.expect(replay.body.idempotentReplay).to.eql(true);pm.expect(replay.body.transactionId).to.eql(results[winner].body.transactionId);});",
-              "  status(await wager(ops[1-winner]),409,\"Conteúdo perdedor permanece conflitante\");",
+              "  status(replay,200,\"Winner replay\");",
+              "  pm.test(\"Winning result persisted\",()=>{pm.expect(replay.body.idempotentReplay).to.eql(true);pm.expect(replay.body.transactionId).to.eql(results[winner].body.transactionId);});",
+              "  status(await wager(ops[1-winner]),409,\"Losing payload remains conflicting\");",
               "  await verify(w,balance,2,2);",
               "",
               "})().catch(error => {",
-              "  pm.test(\"Cenário terminou sem erro de execução\", () => { throw error; });",
+              "  pm.test(\"Scenario completed without execution errors\", () => { throw error; });",
               "});"
             ]
           }
@@ -388,14 +388,14 @@
       ]
     },
     {
-      "name": "04 REFUND e ROLLBACK disputando a mesma BET",
+      "name": "04 REFUND and ROLLBACK competing for the same BET",
       "request": {
         "method": "GET",
         "url": "{{baseUrl}}/health/ready",
         "auth": {
           "type": "noauth"
         },
-        "description": "Clique Send para executar o cenário inteiro. O script após a resposta faz autenticação, preparação, envio paralelo e verificações. Consulte Test Results e Console."
+        "description": "Click Send to run the entire scenario. The post-response script handles authentication, setup, parallel requests, and verification. Inspect Test Results and Console."
       },
       "event": [
         {
@@ -403,7 +403,7 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test(\"API pronta\", () => pm.response.to.have.status(200));",
+              "pm.test(\"API ready\", () => pm.response.to.have.status(200));",
               "(async function () {",
               "  const base = pm.environment.get(\"baseUrl\");",
               "  const urls = (pm.variables.get(\"replicaUrls\") || base).split(\",\").map(x => x.trim().replace(/\\/$/, \"\")).filter(Boolean);",
@@ -432,7 +432,7 @@
               "    }, (err, response) => {",
               "      if (err) return reject(err);",
               "      if (response.code !== 200) return reject(new Error(\"Token \" + client + \": HTTP \" + response.code));",
-              "      try { const value=response.json().access_token; if(!value) throw new Error(\"Token ausente\"); resolve(value); } catch(e) { reject(e); }",
+              "      try { const value=response.json().access_token; if(!value) throw new Error(\"Missing token\"); resolve(value); } catch(e) { reject(e); }",
               "    }));",
               "  }",
               "  const [internal, provider] = await Promise.all([",
@@ -445,7 +445,7 @@
               "  async function wallet() {",
               "    const playerId=guid();",
               "    const response=await send(urls[0]+\"/wallets\", \"POST\", internal, {playerId, initialBalance:{amount:\"100.00\",currency:\"BRL\"}});",
-              "    status(response,201,\"Carteira criada\");",
+              "    status(response,201,\"Wallet created\");",
               "    return {id:response.body.id, playerId};",
               "  }",
               "  function operation(w, kind, amount, reference) {",
@@ -459,15 +459,15 @@
               "  async function verify(w, balance, version, entries) {",
               "    const results = await Promise.all(urls.map(url => send(url+\"/wallets/\"+w.id,\"GET\",internal)));",
               "    results.forEach((r,i) => {",
-              "      status(r,200,\"Consulta na réplica \"+(i+1));",
-              "      pm.test(\"Saldo e versão na réplica \"+(i+1), () => {",
+              "      status(r,200,\"Query on replica \"+(i+1));",
+              "      pm.test(\"Balance and version on replica \"+(i+1), () => {",
               "        pm.expect(r.body.balance).to.deep.eql({amount:balance,currency:\"BRL\"});",
               "        pm.expect(r.body.version).to.eql(version);",
               "      });",
               "    });",
               "    const ledger=await send(urls[0]+\"/wallets/\"+w.id+\"/ledger?limit=100\",\"GET\",internal);",
-              "    status(ledger,200,\"Ledger disponível\");",
-              "    pm.test(\"Ledger sem duplicação e soma correta\", () => {",
+              "    status(ledger,200,\"Ledger available\");",
+              "    pm.test(\"Ledger has no duplicates and the sum is correct\", () => {",
               "      pm.expect(ledger.body.entries).to.have.length(entries);",
               "      pm.expect(ledger.body.nextCursor).to.be.undefined;",
               "      pm.expect(new Set(ledger.body.entries.map(e=>e.transactionId)).size).to.eql(entries);",
@@ -475,23 +475,23 @@
               "      pm.expect(sum).to.eql(Number(balance.replace(\".\",\"\")));",
               "    });",
               "    const rec=await send(urls[0]+\"/wallets/\"+w.id+\"/reconciliation\",\"POST\",internal);",
-              "    status(rec,200,\"Reconciliação disponível\");",
-              "    pm.test(\"Reconciliação consistente\",()=>{",
+              "    status(rec,200,\"Reconciliation available\");",
+              "    pm.test(\"Consistent reconciliation\",()=>{",
               "      pm.expect(rec.body.consistent).to.eql(true);",
               "      pm.expect(rec.body.difference.amount).to.eql(\"0.00\");",
               "      pm.expect(rec.body.storedBalance.amount).to.eql(balance);",
               "      pm.expect(rec.body.calculatedBalance.amount).to.eql(balance);",
               "      pm.expect(rec.body.checkedEntries).to.eql(entries);",
               "    });",
-              "    console.log(\"Carteira do cenário\", {walletId:w.id, balance, version, entries, replicas:urls.length});",
+              "    console.log(\"Scenario wallet\", {walletId:w.id, balance, version, entries, replicas:urls.length});",
               "  }",
               "",
               "  const w=await wallet();",
               "  const bet=operation(w,\"BET\",\"25.00\");",
-              "  status(await wager(bet),200,\"BET aceita\");",
+              "  status(await wager(bet),200,\"BET accepted\");",
               "  const ops=[operation(w,\"REFUND\",\"25.00\",bet.externalTransactionId),operation(w,\"ROLLBACK\",\"25.00\",bet.externalTransactionId)];",
               "  const results=await Promise.all(ops.map((op,i)=>wager(op,i)));",
-              "  pm.test(\"Somente uma reversão aceita\",()=>{",
+              "  pm.test(\"Only one reversal accepted\",()=>{",
               "    pm.expect(results.map(r=>r.code).sort()).to.deep.eql([200,422]);",
               "    pm.expect(results.find(r=>r.code===422).body.failureCode).to.eql(\"ALREADY_REVERSED\");",
               "    pm.expect(results.find(r=>r.code===200).body.status).to.eql(\"PROCESSED\");",
@@ -499,7 +499,7 @@
               "  await verify(w,\"100.00\",3,3);",
               "",
               "})().catch(error => {",
-              "  pm.test(\"Cenário terminou sem erro de execução\", () => { throw error; });",
+              "  pm.test(\"Scenario completed without execution errors\", () => { throw error; });",
               "});"
             ]
           }
@@ -507,14 +507,14 @@
       ]
     },
     {
-      "name": "05 Oito carteiras e 80 apostas independentes",
+      "name": "05 Eight wallets and 80 independent bets",
       "request": {
         "method": "GET",
         "url": "{{baseUrl}}/health/ready",
         "auth": {
           "type": "noauth"
         },
-        "description": "Clique Send para executar o cenário inteiro. O script após a resposta faz autenticação, preparação, envio paralelo e verificações. Consulte Test Results e Console."
+        "description": "Click Send to run the entire scenario. The post-response script handles authentication, setup, parallel requests, and verification. Inspect Test Results and Console."
       },
       "event": [
         {
@@ -522,7 +522,7 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test(\"API pronta\", () => pm.response.to.have.status(200));",
+              "pm.test(\"API ready\", () => pm.response.to.have.status(200));",
               "(async function () {",
               "  const base = pm.environment.get(\"baseUrl\");",
               "  const urls = (pm.variables.get(\"replicaUrls\") || base).split(\",\").map(x => x.trim().replace(/\\/$/, \"\")).filter(Boolean);",
@@ -551,7 +551,7 @@
               "    }, (err, response) => {",
               "      if (err) return reject(err);",
               "      if (response.code !== 200) return reject(new Error(\"Token \" + client + \": HTTP \" + response.code));",
-              "      try { const value=response.json().access_token; if(!value) throw new Error(\"Token ausente\"); resolve(value); } catch(e) { reject(e); }",
+              "      try { const value=response.json().access_token; if(!value) throw new Error(\"Missing token\"); resolve(value); } catch(e) { reject(e); }",
               "    }));",
               "  }",
               "  const [internal, provider] = await Promise.all([",
@@ -564,7 +564,7 @@
               "  async function wallet() {",
               "    const playerId=guid();",
               "    const response=await send(urls[0]+\"/wallets\", \"POST\", internal, {playerId, initialBalance:{amount:\"100.00\",currency:\"BRL\"}});",
-              "    status(response,201,\"Carteira criada\");",
+              "    status(response,201,\"Wallet created\");",
               "    return {id:response.body.id, playerId};",
               "  }",
               "  function operation(w, kind, amount, reference) {",
@@ -578,15 +578,15 @@
               "  async function verify(w, balance, version, entries) {",
               "    const results = await Promise.all(urls.map(url => send(url+\"/wallets/\"+w.id,\"GET\",internal)));",
               "    results.forEach((r,i) => {",
-              "      status(r,200,\"Consulta na réplica \"+(i+1));",
-              "      pm.test(\"Saldo e versão na réplica \"+(i+1), () => {",
+              "      status(r,200,\"Query on replica \"+(i+1));",
+              "      pm.test(\"Balance and version on replica \"+(i+1), () => {",
               "        pm.expect(r.body.balance).to.deep.eql({amount:balance,currency:\"BRL\"});",
               "        pm.expect(r.body.version).to.eql(version);",
               "      });",
               "    });",
               "    const ledger=await send(urls[0]+\"/wallets/\"+w.id+\"/ledger?limit=100\",\"GET\",internal);",
-              "    status(ledger,200,\"Ledger disponível\");",
-              "    pm.test(\"Ledger sem duplicação e soma correta\", () => {",
+              "    status(ledger,200,\"Ledger available\");",
+              "    pm.test(\"Ledger has no duplicates and the sum is correct\", () => {",
               "      pm.expect(ledger.body.entries).to.have.length(entries);",
               "      pm.expect(ledger.body.nextCursor).to.be.undefined;",
               "      pm.expect(new Set(ledger.body.entries.map(e=>e.transactionId)).size).to.eql(entries);",
@@ -594,21 +594,21 @@
               "      pm.expect(sum).to.eql(Number(balance.replace(\".\",\"\")));",
               "    });",
               "    const rec=await send(urls[0]+\"/wallets/\"+w.id+\"/reconciliation\",\"POST\",internal);",
-              "    status(rec,200,\"Reconciliação disponível\");",
-              "    pm.test(\"Reconciliação consistente\",()=>{",
+              "    status(rec,200,\"Reconciliation available\");",
+              "    pm.test(\"Consistent reconciliation\",()=>{",
               "      pm.expect(rec.body.consistent).to.eql(true);",
               "      pm.expect(rec.body.difference.amount).to.eql(\"0.00\");",
               "      pm.expect(rec.body.storedBalance.amount).to.eql(balance);",
               "      pm.expect(rec.body.calculatedBalance.amount).to.eql(balance);",
               "      pm.expect(rec.body.checkedEntries).to.eql(entries);",
               "    });",
-              "    console.log(\"Carteira do cenário\", {walletId:w.id, balance, version, entries, replicas:urls.length});",
+              "    console.log(\"Scenario wallet\", {walletId:w.id, balance, version, entries, replicas:urls.length});",
               "  }",
               "",
               "  const wallets=await Promise.all(Array.from({length:8},()=>wallet()));",
               "  const ops=wallets.flatMap(w=>Array.from({length:10},()=>operation(w,\"BET\",\"1.00\")));",
               "  const results=await Promise.all(ops.map((op,i)=>wager(op,i)));",
-              "  pm.test(\"80 operações independentes processadas uma vez\",()=>{",
+              "  pm.test(\"80 independent operations processed once\",()=>{",
               "    pm.expect(results).to.have.length(80);",
               "    results.forEach(r=>{pm.expect(r.code).to.eql(200);pm.expect(r.body.status).to.eql(\"PROCESSED\");pm.expect(r.body.idempotentReplay).to.eql(false);});",
               "    pm.expect(new Set(results.map(r=>r.body.transactionId)).size).to.eql(80);",
@@ -616,7 +616,7 @@
               "  for(const w of wallets) await verify(w,\"90.00\",11,11);",
               "",
               "})().catch(error => {",
-              "  pm.test(\"Cenário terminou sem erro de execução\", () => { throw error; });",
+              "  pm.test(\"Scenario completed without execution errors\", () => { throw error; });",
               "});"
             ]
           }

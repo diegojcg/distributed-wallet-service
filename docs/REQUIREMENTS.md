@@ -1,44 +1,43 @@
-# Matriz de requisitos e evidências
+# Guarantees and test coverage
 
-O texto original está em CHALLENGE.md. Caminhos abaixo são relativos à raiz do repositório. Os testes de integração rodam contra PostgreSQL, Keycloak e MiniStack reais; `setup` compila e executa três processos independentes com race detector. Um teste unitário não é apresentado como prova de uma integração.
+This matrix connects the PoC's intended guarantees to implementation mechanisms and executable checks. Test names refer to Go tests or their subtests under `internal/` and `tests/integration/`. See [validation evidence](VALIDATION.md) for dated execution results; the matrix itself is not evidence of a fresh run.
 
-| Requisito do enunciado | Implementação | Evidência executável |
+| Guarantee | Implementation | Verification |
 | --- | --- | --- |
-| Go, módulos e versões (§4) | go.mod, go.sum, Dockerfile, compose.yaml | go mod verify; make clean-check |
-| OIDC externo e identidade do provedor (§2) | internal/auth; realm Keycloak; middleware HTTP | TestService/AuthAndProviderIsolation; TestContracts/RealExpiredTokenAndAudience |
-| Isolamento de consultas/replays e operações internas (§2, §9) | Filtro provider_id, claims service_role/provider_id | TestService/AuthAndProviderIsolation; negativa sem efeito em TestContracts |
-| IAM no broker (§2, §10) | infra/ministack/bootstrap.py, fila por provedor | Bootstrap allow/deny; SQSAndHTTPIdempotency; PermanentFailureAndPoisonMessages |
-| Fx e encerramento (§4) | platform.Module, construtores, hooks, contextos/prazos | TestModuleGraphWithoutInfrastructure; TestFxLifecycle; stop/restart do harness e testes de crash |
-| Domínio independente/encapsulado (§6) | Money, Wallet, WagerTransaction, WalletLedgerEntry; snapshots por valor | TestWalletInvariants; TestTransactionDecisions; TestOverflowOpeningLedgerAndEvents |
-| Precisão, escala, moeda e overflow (§5–6) | Money int64, BIGINT; soma de reconciliação NUMERIC exata | TestMoneyParsing, TestMoneyArithmeticBoundaries, TestMoneyJSON, FuzzMoneyRoundTrip; overflow persistido em TestContracts |
-| Zero por tipo e OPENING interno (§6–7) | Operation.Validate, NewOpeningTransaction, schema interno/externo | TestOperationNormalization; ExternalOpeningZerosAndOverflow; poison OPENING SQS |
-| Abertura atômica, unicidade e versão (§6.2–6.4, §9) | Store.Open; constraints e triggers; versão inicial 1 | TestOverflowOpeningLedgerAndEvents; DatabaseGuards; abertura positiva/zero e reconciliações |
-| Regras de BET/WIN/LOSS (§7) | WagerTransaction.Evaluate e Wallet | TestTransactionDecisions; ReversalPolicyAndLoss; Two80BetsAcrossProcesses |
-| REFUND/ROLLBACK e reversão única (§7) | Evaluate, one_successful_reversal, contexto SQL | TestReversalDecisions; TestReferenceContextAndKind; ReversalPolicyAndLoss; RefundAndRollbackRace |
-| Relógio consistente entre instâncias (§5, §8) | clock_timestamp após lock; piso de carteira/transação | TestStoredFutureTimestamps (Apply, Consume, retomada e FAILED) |
-| Estados e terminais imutáveis (§6.3) | Transições do domínio, guard_transaction | TestPendingAndFailureStates; DatabaseGuards |
-| FAILED auditável versus retry transitório (§6.3) | store/failure.go, rollback antes da auditoria | TestPermanentClassification; TestPermanentFailureAndPoisonMessages; TestDependencyOutages |
-| Hash canônico, duas unicidades e saldo histórico (§9) | Operation.Hash; replay; constraints por provedor | TestOperationNormalization; 50DuplicatesAndHistoricalReplay; SQSAndHTTPIdempotency |
-| Concorrência distribuída e ausência de lost update (§5, §8) | SELECT FOR UPDATE por carteira, UPDATE com versão, schema | Two80BetsAcrossProcesses (inclui replay de ambas); 50DuplicatesAndHistoricalReplay; HTTPAndSQSOverlapUnderWalletLock, três processos reais |
-| Carteiras independentes (§5, §8) | Ausência de lock global no fluxo financeiro | IndependentWallets (uma carteira bloqueada); ParallelIndependentWallets (80 operações/8 carteiras) |
-| Ledger append-only e saldo consistente (§5–6) | REVOKE, triggers, unicidades e verificações diferidas; migration 003 | DatabaseGuards; TestStorageAudit; falha SQL após atualização da operação em PermanentFailureAndPoisonMessages; reconciliações |
-| Atomicidade domínio/inbox/outbox (§6.5, §10–11) | Store.run com uma transação SQL; auditoria FAILED independente após rollback | SQSAndHTTPIdempotency; SQSCommitBeforeACKCrash; PermanentFailureAndPoisonMessages |
-| Pendência, backoff, TTL e retomada (§7) | store/references.go + Evaluate; metadados persistidos | PendingReferenceRecovery; ReferenceExpiryAndRejectedReference; TestAvailableReferenceWinsAtRetryBoundary; TestBlockedReferenceDoesNotStopBatch; AllProcessesRestart |
-| Inbox conflituosa e deduplicação efetiva (§10) | Hash integral do envelope, PK consumer/messageId | TestDecodeMessageContract; dez mensagens recebidas em SQSAndHTTPIdempotency; alteração do mesmo messageId chega à DLQ |
-| ACK após commit, redrive e liberação (§10) | workers.handleMessage, visibility 30s/processamento 10s/redrive 5 | TestSQSCommitBeforeACKCrash; poison/permanent failures; ciclos de stop |
-| Outbox concorrente, lease e retry (§11) | Claim SKIP LOCKED, lease 30s e token de confirmação | TestConcurrentClaims; OutboxPublishedByConcurrentWorkers; PublishBeforeConfirmationCrash (consumo real com observer); TestStorageAudit/LeaseRecoveryAndStaleWorkerFencing; BrokerUnavailableKeepsCommittedEvents |
-| Eventos tipados e payload imutável (§11) | domain/events.go; guard_outbox; docs/EVENTS.md | TestOverflowOpeningLedgerAndEvents; CorrelationAndImmutableEventSnapshot |
-| Idempotência após perda da resposta (§3, §13) | Resultado persistido antes de responder | TestHTTPCommitCrash |
-| Reinício de todas as instâncias (§3, §13) | Estado financeiro, pendências e eventos no PostgreSQL | AllProcessesRestart; TestDependencyOutages com stop/restart total |
-| Contrato HTTP e paginação (§9) | platform/http.go; store/ledger.go; ARCHITECTURE.md | TestService; TestContracts; TestHTTPBoundaryAudit; DuplicateOpeningAndMissingKey; TestHTTPErrorContractAndDiagnosticIDs; smoke.py |
-| Reconciliação consistente e sem reparo (§9) | REPEATABLE READ READ ONLY, cálculo exato, log/contador | Two80BetsAcrossProcesses; ParallelIndependentWallets; ReconciliationReportsDriftWithoutRepair |
-| Health público e dependências (§9) | Ping PostgreSQL e consulta autenticada SQS | TestFxLifecycle; TestDependencyOutages; health das três réplicas finais |
-| Observabilidade (§12) | Logs JSON, métricas protegidas, correlação persistida | CorrelationAndImmutableEventSnapshot; ReconciliationReportsDriftWithoutRepair; métricas no teste de outage |
-| Migrações reversíveis e checkout limpo (§4, §15) | migrations 001–003; scripts/clean-check.sh | TestMigrationRollback (up/down/up); make clean-check |
-| Formatação, race detector e análise (§13, §15) | Comandos em README/Makefile | gofmt, go test, go test -race, go vet, govulncheck; docs/VALIDATION.md |
+| OIDC token validation | go-oidc, RS256/JWKS, issuer/audience/expiry | TestService/AuthAndProviderIsolation; TestContracts/RealExpiredTokenAndAudience |
+| Provider isolation and internal operations | provider_id query filters; service_role/provider_id claims | TestService/AuthAndProviderIsolation; rejected requests without effects in TestContracts |
+| Broker IAM | infra/ministack/bootstrap.py; separate provider queues | Bootstrap allow/deny; SQSAndHTTPIdempotency; PermanentFailureAndPoisonMessages |
+| Fx lifecycle and shutdown | platform.Module, constructors, hooks, contexts/timeouts | TestModuleGraphWithoutInfrastructure; TestFxLifecycle; harness stop/restart and crash tests |
+| Independent, encapsulated domain | Money, Wallet, WagerTransaction, WalletLedgerEntry; value snapshots | TestWalletInvariants; TestTransactionDecisions; TestOverflowOpeningLedgerAndEvents |
+| Precision, scale, currency, overflow | Money int64, BIGINT; exact NUMERIC reconciliation sum | TestMoneyParsing; TestMoneyArithmeticBoundaries; TestMoneyJSON; FuzzMoneyRoundTrip; persisted overflow in TestContracts |
+| Per-kind zero rules and internal OPENING | Operation.Validate, NewOpeningTransaction, internal/external schema constraints | TestOperationNormalization; ExternalOpeningZerosAndOverflow; SQS poison OPENING |
+| Atomic opening, uniqueness, version | Store.Open; constraints/triggers; initial version 1 | TestOverflowOpeningLedgerAndEvents; DatabaseGuards; positive/zero opening and reconciliation |
+| BET/WIN/LOSS rules | WagerTransaction.Evaluate and Wallet | TestTransactionDecisions; ReversalPolicyAndLoss; Two80BetsAcrossProcesses |
+| REFUND/ROLLBACK and one successful reversal | Evaluate, one_successful_reversal, SQL context checks | TestReversalDecisions; TestReferenceContextAndKind; ReversalPolicyAndLoss; RefundAndRollbackRace |
+| Consistent time across instances | clock_timestamp after lock; wallet/transaction timestamp floor | TestStoredFutureTimestamps: Apply, Consume, recovery, FAILED |
+| Immutable terminal states | Domain transitions and guard_transaction | TestPendingAndFailureStates; DatabaseGuards |
+| Auditable FAILED versus transient retry | store/failure.go; rollback before audit | TestPermanentClassification; TestPermanentFailureAndPoisonMessages; TestDependencyOutages |
+| Canonical hash, dual uniqueness, historical balance | Operation.Hash; replay; provider-scoped constraints | TestOperationNormalization; 50DuplicatesAndHistoricalReplay; SQSAndHTTPIdempotency |
+| Distributed concurrency without lost updates | Wallet SELECT FOR UPDATE, version-checked UPDATE, schema | Two80BetsAcrossProcesses including both replays; 50DuplicatesAndHistoricalReplay; HTTPAndSQSOverlapUnderWalletLock; three real processes |
+| Independent wallets | No global application lock on financial path | IndependentWallets with a blocked wallet; ParallelIndependentWallets with 80 operations/eight wallets |
+| Append-only ledger and consistent balance | REVOKE, triggers, unique/deferred checks; migration 003 | DatabaseGuards; TestStorageAudit; SQL failure after operation update in PermanentFailureAndPoisonMessages; reconciliation |
+| Domain/inbox/outbox atomicity | Store.run in one SQL transaction; separate FAILED audit after rollback | SQSAndHTTPIdempotency; SQSCommitBeforeACKCrash; PermanentFailureAndPoisonMessages |
+| Pending references, backoff, TTL, recovery | store/references.go + Evaluate; persisted metadata | PendingReferenceRecovery; ReferenceExpiryAndRejectedReference; TestAvailableReferenceWinsAtRetryBoundary; TestBlockedReferenceDoesNotStopBatch; AllProcessesRestart |
+| Inbox conflicts and actual deduplication | Whole-envelope hash; consumer/messageId primary key | TestDecodeMessageContract; ten actual receives in SQSAndHTTPIdempotency; changed payload with the same messageId reaches DLQ |
+| ACK after commit, redrive, visibility release | workers.handleMessage; visibility 30s, processing 10s, redrive 5 | TestSQSCommitBeforeACKCrash; poison/permanent failures; stop cycles |
+| Concurrent outbox, leases, retries | SKIP LOCKED claims, 30s leases, confirmation tokens | TestConcurrentClaims; OutboxPublishedByConcurrentWorkers; PublishBeforeConfirmationCrash with real observer; TestStorageAudit/LeaseRecoveryAndStaleWorkerFencing; BrokerUnavailableKeepsCommittedEvents |
+| Typed events and immutable payloads | domain/events.go; guard_outbox; EVENTS.md | TestOverflowOpeningLedgerAndEvents; CorrelationAndImmutableEventSnapshot |
+| Idempotency after response loss | Result persisted before response | TestHTTPCommitCrash |
+| Restart of every instance | Financial state, pending references, and events in PostgreSQL | AllProcessesRestart; TestDependencyOutages with full stop/restart |
+| HTTP contract and pagination | platform/http.go; store/ledger.go; ARCHITECTURE.md | TestService; TestContracts; TestHTTPBoundaryAudit; DuplicateOpeningAndMissingKey; TestHTTPErrorContractAndDiagnosticIDs; smoke.py |
+| Consistent reconciliation without repair | REPEATABLE READ READ ONLY, exact arithmetic, log/counter | Two80BetsAcrossProcesses; ParallelIndependentWallets; ReconciliationReportsDriftWithoutRepair |
+| Public health and dependency checks | PostgreSQL ping and authenticated SQS query | TestFxLifecycle; TestDependencyOutages; health of three final replicas |
+| Observability | JSON logs, protected metrics, persisted correlation | CorrelationAndImmutableEventSnapshot; ReconciliationReportsDriftWithoutRepair; outage metrics |
+| Reversible migrations and clean setup | Migrations 001–003; scripts/clean-check.sh | TestMigrationRollback up/down/up; make clean-check |
+| Formatting, race detection, analysis | README/Makefile commands | gofmt; go test; go test -race; go vet; govulncheck; VALIDATION.md |
 
-## Interpretações e limites
+## Policy boundaries
 
-Uma referência admite uma única reversão bem-sucedida, mesmo entre tipos diferentes. Rollback de refund é permitido, sem liberar outra reversão da aposta original. Há processamento síncrono sem commit intermediário de PENDING; somente PENDING_REFERENCE é confirmado para retomada. FAILED não é uma rejeição de negócio e não emite WagerTransactionRejected.
+A reference permits one successful reversal across both reversal kinds. Rolling back a refund is allowed without making the original bet eligible for another reversal. Synchronous processing has no intermediate PENDING commit; PENDING_REFERENCE is durable for recovery. FAILED is distinct from a business rejection and emits no WagerTransactionRejected event.
 
-Os testes paralelos verificam correção, não constituem benchmark de capacidade. Não foram implementados partidas dobradas, dashboard, OpenTelemetry ou resultados de carga com percentis; são diferenciais opcionais. Não se alega equivalência de durabilidade entre MiniStack e AWS SQS nem configuração pronta para produção. As limitações operacionais estão em ARCHITECTURE.md.
+Parallel tests establish correctness for the exercised scenarios, not capacity. Double-entry accounting, dashboards, OpenTelemetry, and load-test percentiles are outside the current implementation. MiniStack durability is not claimed equivalent to AWS SQS, and the environment is not production-ready. See [architecture](../ARCHITECTURE.md) for operational tradeoffs and [origin](ORIGIN.md) for the initial specification.

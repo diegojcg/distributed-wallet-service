@@ -1,50 +1,110 @@
-# Jungle Wallet Service
+# Distributed Wallet Service
 
-Serviço Go para processamento distribuído de apostas, com dinheiro exato, PostgreSQL, OIDC, inbox/outbox e SQS. O enunciado original está em [docs/CHALLENGE.md](docs/CHALLENGE.md). Decisões e limitações estão em [ARCHITECTURE.md](ARCHITECTURE.md). A matriz de cobertura está em [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) e a evidência de execução em [docs/VALIDATION.md](docs/VALIDATION.md).
+A Go proof of concept for concurrent wallet transactions, idempotency, and failure recovery.
 
-Collections importáveis, autenticação automática e roteiro de concorrência estão em [docs/postman/README.md](docs/postman/README.md).
+What happens when several service instances receive the same bet, two withdrawals compete for the same balance, or a process crashes after committing a transaction? This project explores those cases with a PostgreSQL ledger, authenticated HTTP and SQS inputs, and transactional inbox/outbox processing.
 
-## Pré-requisitos
+The implementation supports BET, WIN, LOSS, REFUND, and ROLLBACK. Its focus is financial correctness under retries and competing requests, with executable evidence and explicit operational limits.
 
-- Docker Engine e Docker Compose v2 com suporte a `--wait` (validado com Engine 25.0.2 / Compose 2.19.1).
-- Go 1.27.1 para desenvolvimento/testes. O `go.mod` seleciona essa versão; Go com auto-download de toolchain pode baixá-la sem alterar a instalação global.
-- Compilador C para `go test -race` (GCC/Clang).
-- Portas locais 55432 (PostgreSQL), 54566 (SQS) e 58080 (Keycloak) disponíveis.
+## What this demonstrates
 
-As imagens e dependências têm versões explícitas; `go.sum` é versionado. O ambiente usa apenas dados e credenciais de desenvolvimento, vinculando portas ao loopback. Não reutilize esses exemplos em produção.
+| Property | Mechanism | Example verification |
+| --- | --- | --- |
+| Exact money and nonnegative balances | Integer cents, domain validation, PostgreSQL constraints | Parsing/overflow tests; two bets of 80 competing for a balance of 100 |
+| Consistency across instances | Wallet row locks, version checks, atomic SQL commits | Three independent processes; eight wallets receiving 80 concurrent bets |
+| Durable idempotency | Provider-scoped unique keys, canonical payload hash, stored results | 50 identical bets produce one debit; replays return the historical balance |
+| Auditable state | Append-only ledger, protected terminal states, snapshot reconciliation | SQL mutation guards and deliberate drift detection |
+| Recovery after interruption | Transactional inbox/outbox, leases, retries, pending-reference worker | Real process termination after commit and after event publication |
+| Provider isolation | OIDC claims, provider-filtered queries, broker IAM policies | Real token validation and broker allow/deny checks |
 
-## Inicialização completa
+**Scope:** a locally reproducible PoC, with at-least-once event delivery. It does not claim production readiness, exactly-once messaging, strict event ordering, or measured throughput. See [architecture and tradeoffs](ARCHITECTURE.md), [test coverage](docs/REQUIREMENTS.md), and [dated validation results](docs/VALIDATION.md).
+
+## Architecture at a glance
+
+```mermaid
+flowchart LR
+    Client[HTTP clients] --> API[Go service replicas]
+    IdP[Keycloak / OIDC] --> API
+    Producer[Provider producers] --> Input[SQS FIFO inputs + DLQs]
+    Input --> API
+    API --> DB[(PostgreSQL: wallets, transactions, ledger, inbox, outbox)]
+    DB --> Publisher[Outbox workers]
+    Publisher --> Output[SQS wallet events]
+    Output --> Consumer[Consumers: deduplicate by eventId]
+```
+
+HTTP handlers and SQS consumers share the same financial use case. A database transaction commits the operation, balance, ledger, outbox, and applicable inbox record together. Publishing happens after that commit; consumers must handle duplicate events and gaps in `walletVersion`.
+
+Stack: Go 1.27.1, PostgreSQL 17.6, pgx, Uber Fx, Keycloak 26.7.4, and MiniStack 1.5.17 with IAM enforcement enabled. Images and dependencies use explicit versions, and `go.sum` is committed.
+
+## Quick start
+
+Requires Docker Engine and Compose v2 with `--wait` support (validated with Engine 25.0.2 / Compose 2.19.1). Default infrastructure ports are 55432 (PostgreSQL), 54566 (SQS), and 58080 (Keycloak). Ports bind to loopback; credentials are local development examples.
 
 ```sh
 docker compose up --build --scale app=3 -d --wait
-docker compose ps
-docker compose port --index 1 app 8080
-```
-
-Cada réplica recebe uma porta local livre. `docker compose up --build` sem scale também funciona com uma instância. Migrações, realm/clients do Keycloak, filas FIFO/DLQ e usuários/políticas IAM são provisionados automaticamente. `broker-init` falha se as verificações de allow/deny não se comportarem como esperado.
-
-Keycloak: http://localhost:58080 — console local com `local-admin` / `local-admin-only`. O issuer da API é `http://localhost:58080/realms/jungle`, audience `jungle-wallet`.
-
-```sh
 BASE="http://$(docker compose port --index 1 app 8080)"
 curl "$BASE/health/live"
 curl "$BASE/health/ready"
+python3 scripts/smoke.py
 ```
 
-Health checks são públicos. Os endpoints de negócio e `/metrics` exigem token.
+Each replica receives a dynamic local port. Use `--index 2` or `--index 3` to discover the others; check ports again after recreating containers. Starting without `--scale` runs one instance.
 
-## Desenvolvimento e testes
+Compose provisions migrations, Keycloak clients, FIFO queues, DLQs, and IAM identities/policies. Broker initialization fails if the expected allow/deny checks fail. The authenticated smoke test creates a unique wallet and verifies all five operation types, isolation, historical replay, pagination, and reconciliation. Expected final balance: **85.00 BRL**, version **5**, **five ledger entries**. It preserves the test data and prints the wallet ID.
+
+For interactive exploration, import the [Postman collections and environment](docs/postman/README.md), or follow the [manual walkthrough](docs/MANUAL.md). Postman includes five concurrency scenarios with automatic authentication and financial-state assertions.
+
+## Authentication and a first transaction
+
+Health endpoints are public. Business endpoints and `/metrics` require tokens. Local Keycloak is at `http://localhost:58080`, with console credentials `local-admin` / `local-admin-only`, issuer `http://localhost:58080/realms/jungle`, and audience `jungle-wallet`.
+
+Service clients are `wallet-internal`, `provider-a`, `provider-b`, and `metrics-reader`; each demo secret is `<clientId>-local-secret`. Normal tokens expire after 120 seconds. The `expired-token` and `wrong-audience` clients support negative tests.
+
+The following uses Python 3 to read JSON and generate a new player ID:
 
 ```sh
-make infra             # containers, IAM, credenciais locais em work/, migrations
-cp .env.example .env   # valores locais, arquivo ignorado pelo Git
+token() {
+  curl -fsS http://localhost:58080/realms/jungle/protocol/openid-connect/token \
+    -d grant_type=client_credentials -d "client_id=$1" \
+    -d "client_secret=$1-local-secret" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])'
+}
+TOKEN_INTERNAL=$(token wallet-internal)
+TOKEN_PROVIDER=$(token provider-a)
+PLAYER_ID=$(python3 -c 'import uuid; print(uuid.uuid4())')
+WALLET_ID=$(curl -fsS "$BASE/wallets" \
+  -H "Authorization: Bearer $TOKEN_INTERNAL" -H 'Content-Type: application/json' \
+  -d "{\"playerId\":\"$PLAYER_ID\",\"initialBalance\":{\"amount\":\"100.00\",\"currency\":\"BRL\"}}" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+BET_ID="demo-bet-$PLAYER_ID"
+
+curl -sS "$BASE/wagering/transactions" \
+  -H "Authorization: Bearer $TOKEN_PROVIDER" \
+  -H 'Content-Type: application/json' -H "Idempotency-Key: $BET_ID" \
+  -d "{\"providerId\":\"provider-a\",\"externalTransactionId\":\"$BET_ID\",\"playerId\":\"$PLAYER_ID\",\"walletId\":\"$WALLET_ID\",\"roundId\":\"demo-round\",\"gameId\":\"demo-game\",\"kind\":\"BET\",\"money\":{\"amount\":\"25.00\",\"currency\":\"BRL\"}}"
+
+curl -sS "$BASE/wallets/$WALLET_ID/ledger?limit=50" -H "Authorization: Bearer $TOKEN_INTERNAL"
+curl -sS -X POST "$BASE/wallets/$WALLET_ID/reconciliation" -H "Authorization: Bearer $TOKEN_INTERNAL"
+curl -sS "$BASE/providers/provider-a/wagering/transactions/$BET_ID" -H "Authorization: Bearer $TOKEN_PROVIDER"
+```
+
+Resend the same bet with the same body and key: `idempotentReplay=true`, without another debit. The result retains the balance observed during its original execution. Reopening the same player/currency pair returns 409. See [HTTP codes and authorization rules](ARCHITECTURE.md#http-and-reconciliation).
+
+## Development and verification
+
+Go 1.27.1 is selected in `go.mod`; automatic toolchain download can supply it without changing the global installation. The race detector requires a C compiler (GCC or Clang).
+
+```sh
+make infra             # Infrastructure, IAM files in work/, and migrations
+cp .env.example .env   # Local settings; ignored by Git
 set -a
 . ./.env
 set +a
 go run ./cmd/server    # http://127.0.0.1:58000
 ```
 
-`work/*.json` contém exclusivamente credenciais IAM locais, geradas pelo bootstrap. Não versionar. Para desenvolver com containers app já em execução, lembre que eles também consomem as filas; para testes de interrupção determinísticos, pare as réplicas antes da suíte.
+`work/*.json` contains generated local IAM credentials and must remain untracked. Running app containers also consume the queues.
 
 ```sh
 go test ./...
@@ -52,111 +112,59 @@ go test -race ./...
 go vet ./...
 go mod verify
 GOTOOLCHAIN=go1.27.1 go run golang.org/x/vuln/cmd/govulncheck@latest ./...
-
-docker compose stop app  # quando houver réplicas em execução
-make infra
-make integration
+make clean-check
 ```
 
-A suíte de integração usa a build tag `integration`, infraestrutura real, binários com `-race` e três processos com pools/memória separados. Executa testes de autenticação, concorrência, idempotência, reversões, referências pendentes, constraints, outbox, inbox, DLQ, migrações up/down/up em banco temporário e ciclo de vida Fx. Não limpa o banco de desenvolvimento: cria IDs exclusivos por teste. Os bancos temporários de migrations são removidos ao final.
+`make clean-check` is the reproducible, isolated verification entry point. It copies sources into `work/`, creates a separate Compose project with empty volumes, provisions dependencies, runs unit/race checks, vet, module verification and integration tests, then builds the final image, starts three replicas and runs the authenticated smoke test. It removes only its own containers and volumes; the source copy remains for inspection. Additional prerequisites: `tar`, `curl`, `mktemp`, and Python 3. Override its ports (55433, 54567, 58081) with `VERIFY_POSTGRES_PORT`, `VERIFY_SQS_PORT`, and `VERIFY_KEYCLOAK_PORT`.
 
-Comando equivalente completo para integração: `scripts/integration.sh`. O script configura URLs locais, serializa os pacotes de teste e aplica timeout de dez minutos. A suíte completa leva alguns minutos por causa dos leases/visibility timeouts reais. Os testes de indisponibilidade param e reativam PostgreSQL/SQS **deste projeto Compose**; execute em ambiente local dedicado, sem tráfego de outras tarefas. O cenário de divergência usa uma conexão administrativa para introduzir e restaurar corrupção em uma carteira exclusiva do teste.
+The integration suite uses real infrastructure and three independent processes compiled with `-race`. It covers concurrency, authentication, inbox/outbox, DLQ, reversals, reference recovery, database constraints, migration rollback and Fx lifecycle. Its ten-minute timeout accommodates real lease and visibility intervals.
 
-## Tokens e chamadas
-
-Clientes locais: `wallet-internal`, `provider-a`, `provider-b`, `metrics-reader`. Os clientes adicionais `expired-token` (validade de um segundo) e `wrong-audience` servem aos testes negativos de autenticação. O secret de cada um é `<clientId>-local-secret`. Tokens expiram em 120 segundos; obtenha outro quando necessário. Os exemplos abaixo usam Python 3 apenas para extrair JSON.
+For targeted isolated checks:
 
 ```sh
-TOKEN_INTERNAL=$(curl -fsS http://localhost:58080/realms/jungle/protocol/openid-connect/token \
-  -d grant_type=client_credentials -d client_id=wallet-internal \
-  -d client_secret=wallet-internal-local-secret | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
-TOKEN_PROVIDER=$(curl -fsS http://localhost:58080/realms/jungle/protocol/openid-connect/token \
-  -d grant_type=client_credentials -d client_id=provider-a \
-  -d client_secret=provider-a-local-secret | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
-
-curl -sS "$BASE/wallets" -H "Authorization: Bearer $TOKEN_INTERNAL" \
-  -H 'Content-Type: application/json' \
-  -d '{"playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","initialBalance":{"amount":"100.00","currency":"BRL"}}'
+./scripts/clean-check.sh -run 'TestHTTPBoundaryAudit|TestStorageAudit'
+./scripts/clean-check.sh -run '^(TestHTTPCommitCrash|TestSQSCommitBeforeACKCrash|TestPublishBeforeConfirmationCrash)$'
+go test ./internal/domain -fuzz=FuzzMoneyRoundTrip -fuzztime=20s
 ```
 
-Copie o `id` retornado para `WALLET_ID`. Repetir a abertura com o mesmo jogador/moeda retorna 409.
+Crash tests build with `-tags=failpoints`; normal images do not contain the termination points. Marker files prove each injected crash occurred and allow another process to recover.
+
+`make integration` (equivalent to `scripts/integration.sh`) instead uses the **current Compose project** and stops/restarts PostgreSQL and SQS during outage tests. Use it only in a dedicated test environment, with app replicas stopped (`docker compose stop app`, then `make infra`). Test IDs are unique; migration/storage tests use temporary databases. The drift test introduces and restores corruption in its own wallet.
+
+## Messaging
+
+`infra/ministack/bootstrap.py` provisions one input FIFO queue per provider, each with a DLQ, 30-second visibility timeout, and `maxReceiveCount=5`. All output events go to `wallet-events.fifo`.
+
+See [message contracts and examples](docs/EVENTS.md). Commands require `data.idempotencyKey`; send with `MessageGroupId=walletId` and `MessageDeduplicationId=messageId`. After `make infra`, role-specific credentials are in `work/provider-a.json`, `work/provider-b.json`, `work/worker.json`, and `work/observer.json`. SDK/CLI clients use endpoint `http://localhost:54566` and region `us-east-1`.
+
+`TestService/SQSAndHTTPIdempotency` forces ten actual deliveries of one operation and verifies that a conflicting inbox message reaches the DLQ. Event consumers must persist deduplication by `eventId` and reconcile projection gaps using `walletVersion`.
+
+## Configuration, migrations, and shutdown
+
+Application settings are listed in `.env.example`: `DATABASE_URL`, `OIDC_ISSUER`, `OIDC_JWKS_URL`, `OIDC_AUDIENCE`, `HTTP_ADDR`, `SQS_ENDPOINT`, and `BROKER_CREDENTIALS_FILE`. Compose infrastructure ports can be changed with `POSTGRES_PORT`, `SQS_PORT`, and `KEYCLOAK_PORT`. The application reads a mounted worker credential file; it does not use bootstrap administrator credentials.
+
+SQL migrations are embedded in the binary. `up` is idempotent and serialized by an advisory lock:
 
 ```sh
-WALLET_ID='<id retornado>'
-curl -sS "$BASE/wagering/transactions" \
-  -H "Authorization: Bearer $TOKEN_PROVIDER" \
-  -H 'Content-Type: application/json' -H 'Idempotency-Key: provider-a:demo-bet-1' \
-  -d "{\"providerId\":\"provider-a\",\"externalTransactionId\":\"demo-bet-1\",\"playerId\":\"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1\",\"walletId\":\"$WALLET_ID\",\"roundId\":\"demo-round\",\"gameId\":\"demo-game\",\"kind\":\"BET\",\"money\":{\"amount\":\"25.00\",\"currency\":\"BRL\"}}"
-
-curl -sS "$BASE/wallets/$WALLET_ID/ledger?limit=50" -H "Authorization: Bearer $TOKEN_INTERNAL"
-curl -sS -X POST "$BASE/wallets/$WALLET_ID/reconciliation" -H "Authorization: Bearer $TOKEN_INTERNAL"
-curl -sS "$BASE/providers/provider-a/wagering/transactions/demo-bet-1" -H "Authorization: Bearer $TOKEN_PROVIDER"
-```
-
-Repita a aposta com o mesmo corpo/chave: `idempotentReplay=true`, sem outro débito. O saldo retornado é o observado na primeira execução. Contratos, códigos HTTP e permissões estão em ARCHITECTURE.md.
-
-## SQS e eventos
-
-Bootstrap: `infra/ministack/bootstrap.py`. Fila principal `wager-transactions.fifo` pertence ao provider-a; provider-b tem fila própria para impedir falsificação do providerId. Cada uma possui DLQ, visibility de 30 segundos e maxReceiveCount=5. Eventos de saída vão para `wallet-events.fifo`.
-
-Exemplos de entrada/saída e regras de consumo estão em [docs/EVENTS.md](docs/EVENTS.md). `data.idempotencyKey` é obrigatória. Envie com `MessageGroupId=walletId` e `MessageDeduplicationId=messageId`. Credenciais locais específicas por papel ficam em `work/provider-a.json`, `work/provider-b.json`, `work/worker.json` e `work/observer.json` após `make infra`. Use endpoint `http://localhost:54566` e região `us-east-1` com o SDK/CLI SQS.
-
-O teste `TestService/SQSAndHTTPIdempotency` demonstra envio pelo SDK, dez recebimentos efetivos da mesma operação e conflito de inbox enviado à DLQ. Eventos devem ser deduplicados pelo consumidor usando eventId, e projeções de saldo devem considerar walletVersion.
-
-## Migrações
-
-As migrations SQL são incorporadas no binário. `migrate up` é idempotente e serializado por advisory lock. `down` reverte todas as versões instaladas em ordem inversa e **remove todas as tabelas financeiras e seus dados**; use exclusivamente em ambiente descartável e com a aplicação parada.
-
-```sh
-# Aplicar todas as versões pendentes:
 docker compose run --rm migrate up
-
-# Reverter em um ambiente descartável:
-docker compose stop app
-docker compose run --rm migrate down
-
-# Aplicar novamente:
-docker compose run --rm migrate up
+# Local equivalent, using the migration identity:
+DATABASE_URL='<migration-user URL>' go run ./cmd/migrate up
 ```
 
-Execução local equivalente: `DATABASE_URL='<URL do usuário de migrations>' go run ./cmd/migrate up` ou `down`. A aplicação não usa o usuário administrativo.
-
-## Interrupções reproduzíveis
-
-```sh
-./scripts/integration.sh -run TestHTTPCommitCrash -v
-./scripts/integration.sh -run TestSQSCommitBeforeACKCrash -v
-./scripts/integration.sh -run TestPublishBeforeConfirmationCrash -v
-```
-
-Os testes compilam `-tags=failpoints`; a imagem normal não inclui esses pontos de encerramento abrupto. As falhas simuladas são depois do commit HTTP, depois do commit SQS/antes do ACK e depois da publicação/antes da confirmação da outbox. O arquivo marcador garante uma única interrupção, permitindo que outra instância conclua a recuperação.
-
-## Encerramento e dados locais
+`migrate down` reverses every installed migration and **deletes the financial tables and their data**. Use it only in a disposable environment with the application stopped. The integration suite verifies up/down/up in a temporary database.
 
 ```sh
 docker compose down
 ```
 
-Esse comando preserva volumes nomeados. O PostgreSQL guarda os dados financeiros. MiniStack usa persistência de estado em volume no encerramento normal; não se afirma equivalência de durabilidade com AWS SQS diante de crash abrupto do próprio emulador. Keycloak é de desenvolvimento e importa o realm em um container novo; recriá-lo invalida tokens antigos.
+This preserves named volumes. PostgreSQL stores financial state. MiniStack persists state on normal shutdown; its abrupt-crash durability has not been established as equivalent to AWS SQS. Recreating the development Keycloak container imports the realm again and invalidates old tokens.
 
-## Verificação em ambiente limpo
+## Further reading and origin
 
-```sh
-make clean-check
-```
+- [Architecture and decisions](ARCHITECTURE.md): invariants, transaction boundaries, error semantics, security, and operational limits.
+- [Guarantees and test coverage](docs/REQUIREMENTS.md): implementation-to-test mapping.
+- [Validation evidence](docs/VALIDATION.md): dated results and what they establish.
+- [Manual walkthrough](docs/MANUAL.md) and [Postman](docs/postman/README.md): repeatable exploration.
+- [Messaging contracts](docs/EVENTS.md): envelopes and consumer responsibilities.
 
-O script copia apenas os fontes para uma pasta temporária em work/, cria um projeto Compose exclusivo e volumes vazios, provisiona IAM/Keycloak/PostgreSQL, executa testes com race detector e sobe a imagem final com três réplicas. Remove apenas os volumes e containers que acabou de criar. A pasta copiada permanece para inspeção. Usa as portas 55433, 54567 e 58081; substitua com VERIFY_POSTGRES_PORT, VERIFY_SQS_PORT e VERIFY_KEYCLOAK_PORT se necessário. Requer também tar, curl, mktemp e Python 3 para o smoke autenticado.
-
-As variáveis de aplicação estão em `.env.example`: DATABASE_URL, OIDC_ISSUER, OIDC_JWKS_URL, OIDC_AUDIENCE, HTTP_ADDR, SQS_ENDPOINT e BROKER_CREDENTIALS_FILE. Em Compose/scripts, POSTGRES_PORT, SQS_PORT e KEYCLOAK_PORT alteram as portas do ambiente; os defaults são 55432, 54566 e 58080. A aplicação recebe credenciais do worker por arquivo montado somente para leitura. Não utiliza as credenciais administrativas do bootstrap.
-
-Os requisitos obrigatórios e os limites da solução estão documentados em ARCHITECTURE.md e docs/REQUIREMENTS.md.
-
-## Smoke autenticado e auditoria por camada
-
-Com as imagens já em execução, rode `python3 scripts/smoke.py` (Python 3 padrão, sem dependências extras). O script descobre as portas das três réplicas, obtém tokens locais e confere os cinco tipos externos, isolamento, replay histórico, paginação e reconciliação. Ele cria uma carteira de teste com UUID próprio e imprime seu ID; não apaga dados nem reinicia serviços. Para uma única instância use `SMOKE_BASE=http://127.0.0.1:<porta>`; `OIDC_ISSUER` pode substituir o issuer local.
-
-`go test ./internal/domain -fuzz=FuzzMoneyRoundTrip -fuzztime=20s` explora a serialização monetária. Para repetir apenas a auditoria de fronteiras e SQL, após provisionar um ambiente de testes dedicado, execute `./scripts/integration.sh -run 'TestHTTPBoundaryAudit|TestStorageAudit' -v`. O segundo teste usa um banco temporário e diferencia as restrições do usuário da aplicação dos triggers que também bloqueiam alterações pelo administrador.
-
-Consulte [docs/VALIDATION.md](docs/VALIDATION.md) para os resultados dos testes e [docs/MANUAL.md](docs/MANUAL.md) para o roteiro de validação manual.
-
-Para uma regressão isolada após uma mudança pontual: `./scripts/clean-check.sh -run 'TestHTTPBoundaryAudit|TestStorageAudit'`. Sem argumentos, o script executa a integração completa. Nos dois casos, a imagem final recebe o smoke autenticado.
+This project originated from Jungle Gaming's Go backend challenge and has been developed into a standalone proof of concept. [Origin and attribution](docs/ORIGIN.md) links the original specification. Repository and runtime identifiers retain `jungle-wallet` for continuity.

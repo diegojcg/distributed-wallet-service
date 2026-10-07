@@ -1,10 +1,12 @@
-# Roteiro de validação manual
+# Manual verification walkthrough
 
-Execute a partir da raiz do projeto. Os testes automatizados de falha usam infraestrutura descartável. Não rode `make integration` no ambiente que estiver usando manualmente: essa suíte para e reativa PostgreSQL/SQS para testar recuperação.
+Run commands from the repository root. Automated failure tests use disposable infrastructure. Do not run `make integration` against an environment you are exploring manually: it stops and restarts PostgreSQL/SQS to test recovery.
 
-Para executar pela interface do Postman, use as [collections e instruções de importação](postman/README.md).
+For the Postman interface, use the [collections and import instructions](postman/README.md).
 
-## Preparação
+## Preparation
+
+Start the stack with `docker compose up --build --scale app=3 -d --wait`, then:
 
 ```sh
 docker compose ps
@@ -13,19 +15,19 @@ curl -fsS "$BASE/health/live"
 curl -fsS "$BASE/health/ready"
 ```
 
-As três réplicas devem estar healthy e os endpoints retornar live/ready. Descubra as outras portas trocando `--index 1` por 2 ou 3.
+All three replicas should be healthy, with live/ready responses. Discover the other ports by replacing `--index 1` with 2 or 3.
 
-Para conferir rapidamente o fluxo completo das imagens, execute:
+For a quick authenticated check of the running images:
 
 ```sh
 python3 scripts/smoke.py
 ```
 
-O resultado deve ser `status: passed`, saldo `85.00`, cinco entradas no ledger e o UUID de uma carteira exclusiva do smoke. Isso não substitui a exploração manual das respostas.
+Expect `status: passed`, balance `85.00`, five ledger entries, and the UUID of a unique smoke-test wallet. The script complements manual response inspection.
 
 ## Tokens
 
-Os clientes usam credenciais locais de exemplo. Tokens normais expiram em 120 segundos; gere outro se receber 401 após uma pausa.
+Clients use local demo credentials. Normal tokens expire after 120 seconds; request another if a pause leads to 401.
 
 ```sh
 token() {
@@ -39,42 +41,42 @@ TOKEN_PROVIDER=$(token provider-a)
 TOKEN_OTHER=$(token provider-b)
 ```
 
-Não publique tokens ou capturas de headers Authorization. Os exemplos de criação de carteira e envio de operações estão no README. Para cada novo teste use um playerId UUID novo, evitando o conflito esperado de jogador/moeda.
+Do not publish tokens or screenshots of Authorization headers. The [README](../README.md#authentication-and-a-first-transaction) includes wallet creation and transaction examples. Use a new playerId UUID for each run to avoid the expected player/currency uniqueness conflict.
 
-## Fluxo financeiro esperado
+## Expected financial flow
 
-Crie uma carteira com 100.00 BRL. Mantenha o mesmo roundId/gameId e gere externalTransactionId/chave únicos para cada nova operação.
+Create a wallet with 100.00 BRL. Keep roundId/gameId consistent and use a unique externalTransactionId and idempotency key for each new operation.
 
-| Passo | Ação | Resultado esperado |
+| Step | Action | Expected result |
 | --- | --- | --- |
-| 1 | Abertura interna com 100.00 | 201, versão 1, um crédito OPENING no ledger |
-| 2 | BET 25.00 | 200/PROCESSED, saldo 75.00, versão 2 |
-| 3 | WIN 10.00 | 200/PROCESSED, saldo 85.00, versão 3 |
-| 4 | Reenviar exatamente o BET do passo 2 | Replay=true, saldo histórico 75.00; saldo atual continua 85.00 |
-| 5 | Mesma chave do BET, mudando money para 26.00 | 409; saldo/ledger inalterados |
-| 6 | REFUND 25.00 referenciando o BET | Saldo 110.00, versão 4 |
-| 7 | ROLLBACK 25.00 referenciando o REFUND | Saldo 85.00, versão 5 |
-| 8 | LOSS 0.00 | PROCESSED, saldo 85.00, versão 5, sem novo ledger |
-| 9 | Outra reversão referenciando o BET original | 422/ALREADY_REVERSED; saldo continua 85.00 |
-| 10 | Ledger com limit=2, seguindo nextCursor | Cinco entradas sem repetição ou omissão |
-| 11 | Reconciliação | consistent=true, storedBalance=calculatedBalance=85.00, difference=0.00 |
+| 1 | Internal opening with 100.00 | 201, version 1, one OPENING ledger credit |
+| 2 | BET 25.00 | 200/PROCESSED, balance 75.00, version 2 |
+| 3 | WIN 10.00 | 200/PROCESSED, balance 85.00, version 3 |
+| 4 | Resend the exact BET from step 2 | Replay=true, historical balance 75.00; current balance remains 85.00 |
+| 5 | Same BET key, changing money to 26.00 | 409; balance/ledger unchanged |
+| 6 | REFUND 25.00 referencing the BET | Balance 110.00, version 4 |
+| 7 | ROLLBACK 25.00 referencing the REFUND | Balance 85.00, version 5 |
+| 8 | LOSS 0.00 | PROCESSED, balance 85.00, version 5, no new ledger entry |
+| 9 | Another reversal of the original BET | 422/ALREADY_REVERSED; balance remains 85.00 |
+| 10 | Ledger with limit=2, following nextCursor | Five entries without duplicates or omissions |
+| 11 | Reconciliation | consistent=true, storedBalance=calculatedBalance=85.00, difference=0.00 |
 
-Use outra réplica para consultar ou reenviar o mesmo BET: a resposta e as garantias devem ser iguais.
+Query or replay the same BET through another replica: results and guarantees should be the same.
 
-## Negativas e pendências
+## Negative cases and pending references
 
-- Sem token: 401. Token provider para POST /wallets: 403. Token provider-b consultando o ID da transação de provider-a: 404.
-- OPENING externo, valor monetário numérico em JSON, negativo ou com mais de duas casas: 400.
-- UUID inválido/nulo e limite de ledger 0/negativo/maior que 100: 400.
-- REFUND antes do BET correspondente: 202/PENDING_REFERENCE. Envie o BET e consulte a transação até PROCESSED; o saldo deve retornar ao valor inicial.
-- Referência já disponível na última tentativa ou após o TTL: resolve enquanto a operação ainda estiver PENDING_REFERENCE; uma rejeição terminal anterior não é reaberta.
-- Referência que nunca chega: REJECTED/REFERENCE_NOT_FOUND após esgotar tentativas ou TTL. As retentativas usam backoff, não são instantâneas.
-- Saldo inicial zero: versão 1, sem OPENING/ledger; primeiro WIN positivo gera versão 2 e o primeiro crédito.
+- No token: 401. Provider token for POST /wallets: 403. Provider-b token querying provider-a's transaction ID: 404.
+- External OPENING, JSON numeric money, negative amounts, or more than two decimal places: 400.
+- Invalid/nil UUID and a ledger limit of zero, negative, or greater than 100: 400.
+- REFUND before its BET: 202/PENDING_REFERENCE. Submit the BET and query until PROCESSED; the balance should return to its initial value.
+- Reference available on the last attempt or after TTL: resolves while the operation is still PENDING_REFERENCE; a previous terminal rejection is not reopened.
+- Reference never arrives: REJECTED/REFERENCE_NOT_FOUND after retry/TTL exhaustion. Retries use backoff and are not immediate.
+- Zero initial balance: version 1, no OPENING/ledger entry; the first positive WIN produces version 2 and the first credit.
 
-Para os cenários SQS, use os envelopes e credenciais descritos em EVENTS.md. MessageGroupId é o walletId e MessageDeduplicationId é o messageId. O mesmo comando em HTTP e SQS deve ter o mesmo externalTransactionId, chave e campos financeiros. Não altere o envelope ao reutilizar um messageId.
+For SQS scenarios, use the [envelopes and credentials](EVENTS.md). MessageGroupId is walletId; MessageDeduplicationId is messageId. The same command over HTTP and SQS must retain externalTransactionId, key, and financial fields. Do not change the envelope when reusing messageId.
 
-## Evidência a observar
+## Evidence to inspect
 
-Verifique códigos HTTP, status/failureCode, replay, saldo atual versus histórico, versão, quantidade de lançamentos e resultado da reconciliação. `/metrics` exige token do client metrics-reader. `/health/live` e `/health/ready` são públicos. Logs JSON estão disponíveis com `docker compose logs app`; não precisam conter corpos financeiros ou tokens para permitir rastreamento.
+Check HTTP codes, status/failureCode, replay, current versus historical balance, version, entry count, and reconciliation. `/metrics` requires the metrics-reader client token. `/health/live` and `/health/ready` are public. JSON logs are available with `docker compose logs app`; tracing does not require logging financial bodies or tokens.
 
-O smoke cria dados de teste persistentes e imprime seus IDs. Nenhum comando deste roteiro apaga volumes. `docker compose down` preserva os dados; `down --volumes` não faz parte do roteiro manual.
+The smoke test creates persistent test data and prints its IDs. This walkthrough does not delete volumes. `docker compose down` preserves data; `down --volumes` is not part of manual verification.

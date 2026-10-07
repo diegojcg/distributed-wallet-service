@@ -1,8 +1,8 @@
-# Contratos de mensageria — versão 1
+# Messaging contracts — version 1
 
-## Entrada e autorização
+## Input and authorization
 
-`wager-transactions.fifo` aceita comandos de provider-a; `provider-b-wager-transactions.fifo`, de provider-b. O bootstrap vincula cada fila à identidade autorizada por IAM. A aplicação compara o providerId com o provedor configurado da fila, independentemente do corpo recebido.
+`wager-transactions.fifo` accepts provider-a commands; `provider-b-wager-transactions.fifo` accepts provider-b commands. Bootstrap binds each queue to its IAM-authorized identity. The application compares providerId against the queue's configured provider independently of the received body.
 
 ```json
 {
@@ -24,13 +24,13 @@
 }
 ```
 
-Use MessageGroupId=walletId e MessageDeduplicationId=messageId. O messageId deve ser único entre os provedores para este consumidor. O campo correlationId é opcional; quando ausente, usa-se messageId (ou o hash do envelope se o ID exceder 128 caracteres). CausationId dos eventos é o messageId original. A correlação explícita tem até 128 caracteres ASCII visíveis; messageId tem até 200. O hash da inbox cobre os bytes completos do envelope, inclusive os metadados. Reenvie exatamente o mesmo envelope para reapresentar a mesma identidade de mensagem.
+Use `MessageGroupId=walletId` and `MessageDeduplicationId=messageId`. The messageId must be unique across providers for this consumer. Optional correlationId defaults to messageId (or the envelope hash if the ID exceeds 128 characters). Event causationId is the original messageId. Explicit correlation IDs allow up to 128 visible ASCII characters; messageId allows 200. The inbox hash covers the complete envelope bytes, including metadata. Resend the exact same envelope when reusing a message identity.
 
-O corpo deve conter apenas campos conhecidos. OPENING externo, falsificação de provedor e mensagens inválidas não recebem ACK e chegam à DLQ após cinco recebimentos. Rejeição de negócio e pendência durável recebem ACK após commit. FAILED é auditado e segue para DLQ; indisponibilidade transitória desfaz a tentativa, mantendo o comando disponível para retry.
+Bodies must contain only known fields. External OPENING, provider spoofing, and invalid messages receive no ACK and reach the DLQ after five receives. Business rejections and durable pending references receive ACK after commit. FAILED is audited and redriven to the DLQ; transient unavailability rolls back the attempt, leaving the command available for retry.
 
-## Saída e roteamento
+## Output and routing
 
-Todos os eventos vão para `wallet-events.fifo`. Somente a identidade observer pode consumi-los. Não há chamada de rede ao broker dentro da transação financeira. MessageGroupId=aggregateId (walletId); MessageDeduplicationId=eventId. O eventId permanece idêntico em tentativas de publicação.
+All events go to `wallet-events.fifo`. Only the observer identity can consume them. No broker network call happens inside the financial transaction. `MessageGroupId=aggregateId` (walletId); `MessageDeduplicationId=eventId`. Publication retries preserve eventId.
 
 ```json
 {
@@ -53,13 +53,13 @@ Todos os eventos vão para `wallet-events.fifo`. Somente a identidade observer p
 }
 ```
 
-| eventType | Campos de data | Ocorrência |
+| eventType | data fields | When emitted |
 | --- | --- | --- |
-| WagerTransactionProcessed | transactionId, walletId, playerId, providerId, externalTransactionId, kind, money, balance | Operação processada, incluindo LOSS e OPENING; metadados externos ausentes na abertura |
-| WagerTransactionRejected | transactionId, walletId, providerId, externalTransactionId, kind, failureCode | Rejeição definitiva |
-| WagerTransactionPendingReference | transactionId, walletId, providerId, externalTransactionId, referenceExternalTransactionId, nextAttemptAt | Primeiro registro de espera; retries não repetem esse evento |
-| WalletBalanceChanged | walletId, transactionId, direction, money, balanceBefore, balanceAfter, walletVersion | Alteração financeira efetiva |
+| WagerTransactionProcessed | transactionId, walletId, playerId, providerId, externalTransactionId, kind, money, balance | Processed operation, including LOSS and OPENING; external metadata is absent for opening |
+| WagerTransactionRejected | transactionId, walletId, providerId, externalTransactionId, kind, failureCode | Terminal business rejection |
+| WagerTransactionPendingReference | transactionId, walletId, providerId, externalTransactionId, referenceExternalTransactionId, nextAttemptAt | Initial wait state; retries do not repeat this event |
+| WalletBalanceChanged | walletId, transactionId, direction, money, balanceBefore, balanceAfter, walletVersion | Actual financial change |
 
-Tipo e versão são definidos pelos construtores do domínio. O payload codificado é privado, devolvido por cópia e protegido contra alteração no banco. Datas são UTC/RFC3339; valores monetários são strings com duas casas. Em HTTP, correlationId vem de X-Correlation-ID, ou de UUID gerado e devolvido no mesmo header. CausationId fica ausente. A retomada de pendências preserva os metadados originais.
+Domain constructors define type and version. Encoded payloads are private, returned by copy, and protected from database mutation. Dates use UTC/RFC3339; money uses strings with two decimal places. For HTTP, correlationId comes from X-Correlation-ID or a generated UUID returned in that header; causationId is absent. Pending-reference recovery preserves the original metadata.
 
-O consumidor de saída deve validar eventType/version, deduplicar persistentemente por eventId e confirmar sua própria atualização antes de remover a mensagem. A semântica é at-least-once. Publishers concorrentes podem publicar versões da mesma carteira fora da ordem financeira; uma projeção deve identificar lacunas por walletVersion e reconciliar. Não use a ordem de entrega para recalcular saldo sem essa proteção. A retenção local é a do emulador; esse ambiente não substitui a durabilidade do SQS real.
+Output consumers must validate eventType/version, persist deduplication by eventId, and commit their own update before deleting the message. Delivery is at-least-once. Concurrent publishers can publish wallet versions out of financial order; projections must detect walletVersion gaps and reconcile. Do not recalculate balances from delivery order without that protection. Local retention is provided by the emulator; this environment does not establish real SQS durability.
