@@ -6,6 +6,6 @@ The specification used during development is available in the [original README a
 
 The repository is now presented as **Distributed Wallet Service**, a proof of concept exploring those guarantees through an implementation, documented decisions, and reproducible tests. This presentation does not imply affiliation with or endorsement by Jungle Gaming.
 
-The repository URL, Go module, database identities, OIDC realm/audience, queue names, and existing API identifiers are retained for compatibility. Changing the documentation language does not change the financial rules or protocol contracts.
+The repository is published as [distributed-wallet-service](https://github.com/diegojcg/distributed-wallet-service). The Go module, database identities, OIDC realm/audience, queue names, and existing API identifiers are retained for compatibility. Changing the documentation language does not change the financial rules or protocol contracts.
 
 See [architecture](../ARCHITECTURE.md), [test coverage](REQUIREMENTS.md), and [validation evidence](VALIDATION.md) for the implemented behavior and its limits.

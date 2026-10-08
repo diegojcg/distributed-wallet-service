@@ -167,4 +167,4 @@ This preserves named volumes. PostgreSQL stores financial state. MiniStack persi
 - [Manual walkthrough](docs/MANUAL.md) and [Postman](docs/postman/README.md): repeatable exploration.
 - [Messaging contracts](docs/EVENTS.md): envelopes and consumer responsibilities.
 
-This project originated from Jungle Gaming's Go backend challenge and has been developed into a standalone proof of concept. [Origin and attribution](docs/ORIGIN.md) links the original specification. Repository and runtime identifiers retain `jungle-wallet` for continuity.
+This project originated from Jungle Gaming's Go backend challenge and has been developed into a standalone proof of concept. [Origin and attribution](docs/ORIGIN.md) links the original specification. The repository is published as `distributed-wallet-service`; Go module and runtime identifiers retain `jungle-wallet` for compatibility.
